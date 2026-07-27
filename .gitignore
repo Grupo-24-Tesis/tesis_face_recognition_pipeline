@@ -1,10 +1,47 @@
-/database
-.venv
-venv
+# ── Virtual environments (rebuild from requirements-*.txt, never commit) ──
 venv/
-*.png
-*.jpeg
-*.jpg
-*.mkv
+venvs/
+.venv/
+
+# ── Python artifacts ──
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Model weights (auto-downloaded at runtime; see README "Files NOT in this repo") ──
 *.pt
+*.pth
+*.onnx
+*.h5
+*.tflite
+
+# ── Input media (user-provided, never committed) ──
+*.mkv
+*.mp4
+*.avi
+*.mov
+*.webm
+
+# ── Images (pipeline outputs live in database/; repo carries no image assets) ──
+# If you ever need an image committed (e.g., docs/), whitelist it explicitly:
+#   !docs/diagram.png
+*.jpg
+*.jpeg
+*.png
+*.bmp
+
+# ── Pipeline outputs ──
+database/
+runs/
+
+# ── Logs / scratch ──
+*.log
+crash.log
+requirements_vm.txt
+core
+core.*
+
+# ── OS / editor noise ──
 .DS_Store
+.idea/
+.vscode/
