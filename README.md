@@ -245,5 +245,5 @@ Dentro de él, `DeepFace.represent(...)` / `DeepFace.verify(...)` con
 ## Uso responsable
 
 Este pipeline procesa grabaciones de videovigilancia de personas identificables.
-Ejecútalo únicamente sobre vídeo que tengas derecho legal a procesar y cumple con las
-leyes de privacidad y de datos biométricos aplicables en tu jurisdicción.
+Se ejecutara únicamente sobre vídeo que tengamos derecho legal a procesar y cumple con las
+leyes de privacidad y de datos biométricos aplicables.
