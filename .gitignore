@@ -1,0 +1,10 @@
+/database
+.venv
+venv
+venv/
+*.png
+*.jpeg
+*.jpg
+*.mkv
+*.pt
+.DS_Store
