@@ -5,7 +5,7 @@
 # Paper: "Focusing on Tracks for Online Multi-Object Tracking" (CVPR 2025)
 # Docs: https://docs.ultralytics.com/modes/track
 
-tracker_type: tracktrack # (str) Tracker backend: tracktrack
+tracker_type: deepocsort # (str) Tracker backend: tracktrack
 track_high_thresh: 0.6 # (float) High-confidence detection threshold
 track_low_thresh: 0.25 # (float) Low-confidence detection threshold for second stage
 new_track_thresh: 0.7 # (float) Minimum score to start a new track via track-aware initialization (TAI)
@@ -33,4 +33,4 @@ gmc_method: sparseOptFlow # (str) GMC method: sparseOptFlow, orb, sift, ecc, non
 
 # ReID
 with_reid: True # (bool) Enable ReID feature matching
-model: auto # (str) ReID model path; 'auto' uses native YOLO features
+model: yolo26m-reid.onnx # (str) ReID model path; 'auto' uses native YOLO features
