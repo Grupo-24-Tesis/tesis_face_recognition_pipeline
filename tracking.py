@@ -4,9 +4,9 @@ from ultralytics import YOLO  # type: ignore
 
 model = YOLO("yolo26m.pt")
 
-VIDEO_PATH = "HD SDI CCTV 1080P Security Camera Front Door Entrance Demo [-IvBKBx0UBo].mkv"
-TRACKER = "custom_deepocsort.yaml"
-CANDIDATES_DIR = os.path.join("database", "candidates_deepocsort")
+VIDEO_PATH = "/data/FaceRecognition/Camera_ch5_20260824100831_20260824102210.mp4"
+TRACKER = "custom_tracktrack.yaml"
+CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
 # Run detection + tracking only on 1 out of every DETECT_EVERY frames.
 DETECT_EVERY = 30
 MAX_CANDIDATES = 10
@@ -44,8 +44,9 @@ def people_tracking():
                 source=frame,
                 tracker=TRACKER,
                 persist=True,     # keep tracker state across calls
+                save=True,
                 classes=[0],      # only track the "person" class
-                verbose=False,
+                verbose=False
             )
             r = results[0]
 
