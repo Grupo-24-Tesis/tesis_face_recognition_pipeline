@@ -1,3 +1,5 @@
+import argparse
+import json
 import os
 
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
@@ -10,6 +12,10 @@ FACES_DIR = os.path.join("database", "faces_cfc_reid")
 FACE_CONFIDENCE_THRESHOLD = 0.92
 FACE_MARGIN = 0.25
 RANKING = "quality"
+# Written by tracking.py; maps each crop to its frame index in the video.
+MANIFEST_NAME = "manifest.json"
+# Written here for worker.py: one entry per track with a saved face.
+RESULTS_NAME = "results.json"
 
 
 def sharpness(image) -> float:
@@ -74,7 +80,7 @@ def rank_key(cand):
     return (cand["face_px"] * (cand["sharpness"] ** 0.5), cand["score"])
 
 
-def process_track(track_id, folder) -> bool:
+def process_track(track_id, folder, faces_dir):
     best = None
     best_name = None
     checked = 0
@@ -96,35 +102,92 @@ def process_track(track_id, folder) -> bool:
     if best is None:
         print(f"[{track_id}] no face above {FACE_CONFIDENCE_THRESHOLD} "
               f"in {checked} candidates")
-        return False
+        return None
 
-    output_dir = os.path.join(FACES_DIR, str(track_id))
+    output_dir = os.path.join(faces_dir, str(track_id))
     os.makedirs(output_dir, exist_ok=True)
-    cv2.imwrite(os.path.join(output_dir, f"face_of_{track_id}.jpg"), best["face"])
+    face_name = f"face_of_{track_id}.jpg"
+    cv2.imwrite(os.path.join(output_dir, face_name), best["face"])
 
     fh, fw = best["face"].shape[:2]
     print(f"[{track_id}] best = {best_name} | score {best['score']:.4f} | "
           f"face {fw}x{fh} | sharpness {best['sharpness']:.1f} "
           f"({checked} candidates checked)")
-    return True
+    return {
+        "track_id": track_id,
+        "face_file": os.path.join(str(track_id), face_name),
+        "candidate": best_name,
+        "score": best["score"],
+    }
+
+
+def load_manifest(candidates_dir):
+    path = os.path.join(candidates_dir, MANIFEST_NAME)
+    if not os.path.isfile(path):
+        return None
+    # tracking.py writes the manifest after its last crop. A crop newer than
+    # the manifest came from a later run (e.g. tracking_results.py), so the
+    # frame indices would be wrong for it.
+    written = os.path.getmtime(path)
+    for track_id in os.listdir(candidates_dir):
+        folder = os.path.join(candidates_dir, track_id)
+        if not os.path.isdir(folder):
+            continue
+        for fname in os.listdir(folder):
+            if os.path.getmtime(os.path.join(folder, fname)) > written:
+                print(f"Ignoring stale {MANIFEST_NAME}: crops are newer; "
+                      f"video times will be empty")
+                return None
+    with open(path) as f:
+        return json.load(f)
+
+
+def add_video_time(face, manifest):
+    """Attach frame index and seconds into the video, if stage 1 recorded them."""
+    face["frame_idx"] = None
+    face["time_s"] = None
+    if manifest is None:
+        return
+    frames = manifest.get("tracks", {}).get(face["track_id"], {})
+    frame_idx = frames.get(face["candidate"])
+    if frame_idx is None:
+        return
+    face["frame_idx"] = frame_idx
+    face["time_s"] = frame_idx / manifest["fps"]
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Stage 2: best face per track")
+    parser.add_argument("--candidates-dir", default=CANDIDATES_DIR)
+    parser.add_argument("--faces-dir", default=FACES_DIR)
+    return parser.parse_args()
 
 
 def main():
-    if not os.path.isdir(CANDIDATES_DIR):
-        print(f"No candidates in {CANDIDATES_DIR} — run tracking.py first")
+    args = parse_args()
+    if not os.path.isdir(args.candidates_dir):
+        print(f"No candidates in {args.candidates_dir} — run tracking.py first")
         return
 
-    found = 0
+    manifest = load_manifest(args.candidates_dir)
+    faces = []
     total = 0
-    for track_id in sorted(os.listdir(CANDIDATES_DIR)):
-        folder = os.path.join(CANDIDATES_DIR, track_id)
+    for track_id in sorted(os.listdir(args.candidates_dir)):
+        folder = os.path.join(args.candidates_dir, track_id)
         if not os.path.isdir(folder):
             continue
         total += 1
-        if process_track(track_id, folder):
-            found += 1
+        face = process_track(track_id, folder, args.faces_dir)
+        if face is not None:
+            add_video_time(face, manifest)
+            faces.append(face)
 
-    print(f"\nSaved a face for {found} of {total} tracked people in {FACES_DIR}")
+    os.makedirs(args.faces_dir, exist_ok=True)
+    with open(os.path.join(args.faces_dir, RESULTS_NAME), "w") as f:
+        json.dump({"tracks_checked": total, "faces": faces}, f, indent=2)
+
+    print(f"\nSaved a face for {len(faces)} of {total} tracked people "
+          f"in {args.faces_dir}")
 
 
 if __name__ == "__main__":
