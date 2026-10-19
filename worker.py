@@ -24,6 +24,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -56,6 +57,9 @@ POST_RETRIES = 5
 # video can't hold the queue forever (the heartbeat would hide it indefinitely).
 STAGE_TIMEOUT = int(os.environ.get("STAGE_TIMEOUT", "7200"))
 POLL_ERROR_BACKOFF = 30    # seconds to wait after an SQS/network error before polling again
+BACKEND_WAIT = 15          # seconds between health checks while the backend is unreachable
+# Results of a finished pipeline run whose POST failed; a redelivery only re-posts them.
+PAYLOAD_NAME = "payload.json"
 
 # NVR exports like Camera_ch5_20260824100831_20260824102210.mp4 carry the
 # recording start as YYYYMMDDHHMMSS; the first such group is the start.
@@ -103,7 +107,8 @@ def run_stage(python, script, *args):
     log.info("running %s", " ".join(cmd))
     # Own session: a SIGTERM/Ctrl-C aimed at the worker doesn't kill the stage
     # mid-job; subprocess.run still kills it if the worker itself errors out.
-    subprocess.run(cmd, cwd=REPO_DIR, check=True,
+    # Stage output goes to the log stream so --local stdout stays pure JSON.
+    subprocess.run(cmd, cwd=REPO_DIR, check=True, stdout=sys.stderr,
                    timeout=STAGE_TIMEOUT, start_new_session=True)
 
 
@@ -171,6 +176,14 @@ def post_results(job_id, appearances):
     raise RuntimeError(f"could not POST results to {url} after {POST_RETRIES} attempts")
 
 
+def backend_reachable():
+    try:
+        with urllib.request.urlopen(f"{BACKEND_URL}/api/health", timeout=5):
+            return True
+    except Exception:
+        return False
+
+
 class VisibilityHeartbeat:
     """Keeps a message hidden while its (possibly long) job runs."""
 
@@ -220,9 +233,22 @@ def parse_message(body):
 def process_job(s3, msg):
     job_id, bucket, key = msg["jobId"], msg["bucket"], msg["objectKey"]
     job_dir = os.path.join(JOBS_DIR, job_id)
+    payload_path = os.path.join(job_dir, PAYLOAD_NAME)
+
+    if os.path.isfile(payload_path):
+        # The pipeline already ran and uploaded the faces; only the POST failed.
+        with open(payload_path) as f:
+            appearances = json.load(f)
+        log.info("[%s] reusing results from a previous attempt", job_id)
+        post_results(job_id, appearances)
+        if not KEEP_JOB_FILES:
+            shutil.rmtree(job_dir, ignore_errors=True)
+        return
+
     # A redelivered job starts clean, so crops from a failed attempt can't leak in.
     shutil.rmtree(job_dir, ignore_errors=True)
     os.makedirs(job_dir)
+    keep_for_retry = False
 
     try:
         video_path = os.path.join(job_dir, "video" + os.path.splitext(key)[1])
@@ -250,9 +276,26 @@ def process_job(s3, msg):
             msg.get("originalFileName") or os.path.basename(key),
             msg.get("createdAt"), upload_face,
         )
-        post_results(job_id, appearances)
+        with open(payload_path, "w") as f:
+            json.dump(appearances, f)
+        try:
+            post_results(job_id, appearances)
+        except JobError:
+            raise
+        except Exception:
+            keep_for_retry = True
+            raise
     finally:
-        if not KEEP_JOB_FILES:
+        if keep_for_retry:
+            # Keep only the payload so the retry doesn't rerun both stages.
+            for name in os.listdir(job_dir):
+                if name != PAYLOAD_NAME:
+                    path = os.path.join(job_dir, name)
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+                    else:
+                        os.remove(path)
+        elif not KEEP_JOB_FILES:
             shutil.rmtree(job_dir, ignore_errors=True)
 
 
@@ -302,7 +345,20 @@ def poll_forever():
     s3 = boto3.client("s3", region_name=AWS_REGION)
 
     log.info("polling %s (backend %s)", QUEUE_URL, BACKEND_URL)
+    backend_down = False
     while not stopping.is_set():
+        # Don't take jobs whose results could not be delivered.
+        if not backend_reachable():
+            if not backend_down:
+                log.warning("backend %s is not reachable; waiting before taking "
+                            "jobs (is the SSH tunnel open and the backend running?)",
+                            BACKEND_URL)
+                backend_down = True
+            stopping.wait(BACKEND_WAIT)
+            continue
+        if backend_down:
+            log.info("backend %s is reachable again; taking jobs", BACKEND_URL)
+            backend_down = False
         try:
             resp = sqs.receive_message(
                 QueueUrl=QUEUE_URL,
