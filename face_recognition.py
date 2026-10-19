@@ -10,7 +10,13 @@ from retinaface import RetinaFace
 CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
 FACES_DIR = os.path.join("database", "faces_cfc_reid")
 FACE_CONFIDENCE_THRESHOLD = 0.92
+# Tight margin used only to measure sharpness for ranking candidates.
 FACE_MARGIN = 0.25
+# Margins of the saved image, as fractions of the face box. Wider than the
+# ranking crop so the result shows head and shoulders, not just the face.
+OUTPUT_MARGIN_SIDE = 0.8
+OUTPUT_MARGIN_TOP = 0.6
+OUTPUT_MARGIN_BOTTOM = 1.8
 RANKING = "quality"
 # Written by tracking.py; maps each crop to its frame index in the video.
 MANIFEST_NAME = "manifest.json"
@@ -23,14 +29,15 @@ def sharpness(image) -> float:
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def crop_face(pixel_array, facial_area):
+def crop_face(pixel_array, facial_area, side, top, bottom):
     x1, y1, x2, y2 = facial_area
     bw, bh = x2 - x1, y2 - y1
-    mx, my = int(bw * FACE_MARGIN), int(bh * FACE_MARGIN)
+    mx = int(bw * side)
 
+    # Clamped to the person crop from stage 1, so the box never leaves it.
     h, w = pixel_array.shape[:2]
-    x1, y1 = max(0, x1 - mx), max(0, y1 - my)
-    x2, y2 = min(w, x2 + mx), min(h, y2 + my)
+    x1, y1 = max(0, x1 - mx), max(0, y1 - int(bh * top))
+    x2, y2 = min(w, x2 + mx), min(h, y2 + int(bh * bottom))
 
     if x2 <= x1 or y2 <= y1:
         return None
@@ -61,7 +68,7 @@ def evaluate_candidate(crop):
     if score < FACE_CONFIDENCE_THRESHOLD or area is None:
         return None
 
-    face = crop_face(crop, area)
+    face = crop_face(crop, area, FACE_MARGIN, FACE_MARGIN, FACE_MARGIN)
     if face is None or face.size == 0:
         return None
 
@@ -70,7 +77,8 @@ def evaluate_candidate(crop):
         "score": score,
         "face_px": (x2 - x1) * (y2 - y1),
         "sharpness": sharpness(face),
-        "face": face,
+        "face": crop_face(crop, area, OUTPUT_MARGIN_SIDE,
+                          OUTPUT_MARGIN_TOP, OUTPUT_MARGIN_BOTTOM),
     }
 
 
