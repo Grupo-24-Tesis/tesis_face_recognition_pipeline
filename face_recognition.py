@@ -17,6 +17,8 @@ FACE_MARGIN = 0.25
 OUTPUT_MARGIN_SIDE = 0.8
 OUTPUT_MARGIN_TOP = 0.6
 OUTPUT_MARGIN_BOTTOM = 1.8
+# Border added around each crop before face detection, as a fraction of its size.
+DETECT_PADDING = 0.2
 RANKING = "quality"
 # Written by tracking.py; maps each crop to its frame index in the video.
 MANIFEST_NAME = "manifest.json"
@@ -45,8 +47,15 @@ def crop_face(pixel_array, facial_area, side, top, bottom):
 
 
 def best_face(pixel_array):
+    # RetinaFace misses faces that touch the crop border (close-ups where the
+    # face fills the person box), so detect on a padded copy and map back.
+    h, w = pixel_array.shape[:2]
+    pad = int(DETECT_PADDING * max(h, w))
+    padded = cv2.copyMakeBorder(
+        pixel_array, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=(0, 0, 0)
+    )
     resp = RetinaFace.detect_faces(
-        pixel_array,
+        padded,
         threshold=FACE_CONFIDENCE_THRESHOLD,
     )
     if not isinstance(resp, dict) or not resp:
@@ -60,7 +69,10 @@ def best_face(pixel_array):
             best_score = score
             best_area = face.get("facial_area")
 
-    return best_score, best_area
+    if best_area is None:
+        return best_score, None
+    x1, y1, x2, y2 = (int(v) - pad for v in best_area)
+    return best_score, (max(0, x1), max(0, y1), min(w, x2), min(h, y2))
 
 
 def evaluate_candidate(crop):
