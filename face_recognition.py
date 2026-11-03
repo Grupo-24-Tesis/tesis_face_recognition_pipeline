@@ -1,8 +1,14 @@
 import argparse
+import ctypes
+import glob
 import json
 import os
+import sysconfig
 
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
+for lib in glob.glob(os.path.join(sysconfig.get_paths()["purelib"],
+                                  "nvidia", "cusolver", "lib", "libcusolver.so.*")):
+    ctypes.CDLL(lib)
 
 import cv2
 from retinaface import RetinaFace
@@ -158,7 +164,7 @@ def load_manifest(candidates_dir):
     if not os.path.isfile(path):
         return None
     # tracking.py escribe el manifest después de su último recorte. Un recorte más
-    # nuevo que el manifest viene de una ejecución posterior (p. ej. tracking_results.py),
+    # nuevo que el manifest viene de otra ejecución en la misma carpeta,
     # así que sus índices de fotograma estarían mal.
     written = os.path.getmtime(path)
     for track_id in os.listdir(candidates_dir):

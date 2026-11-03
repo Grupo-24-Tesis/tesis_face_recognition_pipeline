@@ -5,7 +5,6 @@ import cv2
 from ultralytics import YOLO  # type: ignore
 
 # Valores por defecto para ejecuciones manuales. worker.py los cambia en cada trabajo por argumentos.
-VIDEO_PATH = "/data/FaceRecognition/Camera_ch5_20260824100831_20260824102210.mp4"
 TRACKER = "custom_tracktrack.yaml"
 CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
 # Detección y tracking cada DETECT_INTERVAL_S segundos de video, sin importar los
@@ -42,7 +41,7 @@ def frame_histogram(frame):
     return cv2.normalize(hist, hist)
 
 
-def people_tracking(model, video_path, candidates_dir):
+def people_tracking(model, video_path, candidates_dir, annotated_path=None):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"No se pudo abrir el video: {video_path}")
@@ -55,6 +54,7 @@ def people_tracking(model, video_path, candidates_dir):
     id_offset = 0    # mantiene únicos los IDs de track cuando un reinicio los vuelve a empezar en 1
     max_id = 0
     cuts = 0
+    writer = None
 
     try:
         while True:
@@ -94,6 +94,16 @@ def people_tracking(model, video_path, candidates_dir):
                 verbose=False
             )
             r = results[0]
+
+            if annotated_path:
+                plotted = r.plot()
+                if writer is None:
+                    ah, aw = plotted.shape[:2]
+                    writer = cv2.VideoWriter(annotated_path, cv2.VideoWriter.fourcc(*"mp4v"),
+                                             max(fps / detect_every, 1.0), (aw, ah))
+                    if not writer.isOpened():
+                        raise RuntimeError(f"No se pudo abrir el escritor de video para {annotated_path}")
+                writer.write(plotted)
 
             # los ids pueden ser None antes de que el tracker los asigne
             if r.boxes is None or r.boxes.id is None:
@@ -140,6 +150,8 @@ def people_tracking(model, video_path, candidates_dir):
                     thin_candidates(track_id, out_dir)
     finally:
         cap.release()
+        if writer is not None:
+            writer.release()
 
     if cuts:
         print(f"Se reinició el tracker en {cuts} cortes de escena")
@@ -179,8 +191,9 @@ def write_manifest(candidates_dir, video_path, fps, detect_every):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Etapa 1: seguimiento de personas")
-    parser.add_argument("--video", default=VIDEO_PATH)
+    parser.add_argument("--video", required=True)
     parser.add_argument("--candidates-dir", default=CANDIDATES_DIR)
+    parser.add_argument("--annotated-video", default=None)
     return parser.parse_args()
 
 
@@ -191,13 +204,16 @@ def main():
     if os.path.exists(stale):
         os.remove(stale)
     model = YOLO(YOLO_WEIGHTS)
-    fps, detect_every = people_tracking(model, args.video, args.candidates_dir)
+    fps, detect_every = people_tracking(model, args.video, args.candidates_dir,
+                                        args.annotated_video)
     write_manifest(args.candidates_dir, args.video, fps, detect_every)
     total = sum(candidate_counts.values())
     print(
         f"Se guardaron {total} recortes candidatos de {len(candidate_counts)} personas "
         f"en {args.candidates_dir}"
     )
+    if args.annotated_video:
+        print(f"Video anotado escrito en {args.annotated_video}")
 
 
 if __name__ == "__main__":
