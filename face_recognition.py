@@ -19,6 +19,8 @@ OUTPUT_MARGIN_TOP = 0.6
 OUTPUT_MARGIN_BOTTOM = 1.8
 # Borde que se agrega a cada recorte antes de detectar rostros, como fracción de su tamaño.
 DETECT_PADDING = 0.2
+RETINA_ALLOW_UPSCALING = True
+MIN_FACE_PX = 0
 RANKING = "quality"
 # Lo escribe tracking.py; relaciona cada recorte con su índice de fotograma en el video.
 MANIFEST_NAME = "manifest.json"
@@ -58,6 +60,7 @@ def best_face(pixel_array):
     resp = RetinaFace.detect_faces(
         padded,
         threshold=FACE_CONFIDENCE_THRESHOLD,
+        allow_upscaling=RETINA_ALLOW_UPSCALING,
     )
     if not isinstance(resp, dict) or not resp:
         return 0.0, None
@@ -81,12 +84,16 @@ def evaluate_candidate(crop):
     if score < FACE_CONFIDENCE_THRESHOLD or area is None:
         return None
 
+    x1, y1, x2, y2 = area
+    if min(x2 - x1, y2 - y1) < MIN_FACE_PX:
+        return None
+
     face = crop_face(crop, area, FACE_MARGIN, FACE_MARGIN, FACE_MARGIN)
     if face is None or face.size == 0:
         return None
 
-    x1, y1, x2, y2 = area
     return {
+        "area": area,
         "score": score,
         "face_px": (x2 - x1) * (y2 - y1),
         "sharpness": sharpness(face),
@@ -139,6 +146,10 @@ def process_track(track_id, folder, faces_dir):
         "face_file": os.path.join(str(track_id), face_name),
         "candidate": best_name,
         "score": best["score"],
+        "face_box": list(best["area"]),
+        "face_px": best["face_px"],
+        "sharpness": best["sharpness"],
+        "candidates_checked": checked,
     }
 
 

@@ -20,6 +20,10 @@ MAX_CANDIDATES = 10
 # reinicia el tracker para que personas de escenas distintas nunca queden en un mismo
 # track. Las cámaras fijas quedan muy por encima.
 SCENE_CUT_CORRELATION = 0.5
+YOLO_WEIGHTS = "yolo26m.pt"
+YOLO_CONF = 0.1
+YOLO_IOU = 0.7
+YOLO_IMGSZ = 640
 # Se escribe junto a las carpetas de los tracks para que la etapa 2 sepa cuándo se tomó cada recorte.
 MANIFEST_NAME = "manifest.json"
 
@@ -28,6 +32,7 @@ last_saved_step = {}    # track_id -> paso de procesamiento del último recorte 
 sample_every = {}       # track_id -> pasos entre recortes guardados (se duplica al podar)
 next_index = {}         # track_id -> número del próximo nombre de archivo de recorte
 candidate_frames = {}   # track_id -> {nombre del recorte: índice del fotograma en el video}
+candidate_boxes = {}
 
 
 def frame_histogram(frame):
@@ -83,6 +88,9 @@ def people_tracking(model, video_path, candidates_dir):
                 tracker=TRACKER,
                 persist=True,     # conserva el estado del tracker entre llamadas
                 classes=[0],      # solo sigue la clase "person"
+                conf=YOLO_CONF,
+                iou=YOLO_IOU,
+                imgsz=YOLO_IMGSZ,
                 verbose=False
             )
             r = results[0]
@@ -124,6 +132,8 @@ def people_tracking(model, video_path, candidates_dir):
                 last_saved_step[track_id] = step
                 frames = candidate_frames.setdefault(track_id, {})
                 frames[fname] = frame_idx
+                candidate_boxes.setdefault(track_id, {})[fname] = [
+                    int(x1), int(y1), int(x2), int(y2)]
                 candidate_counts[track_id] = len(frames)
 
                 if len(frames) >= MAX_CANDIDATES:
@@ -143,6 +153,7 @@ def thin_candidates(track_id, out_dir):
         if i % 2 == 1:
             os.remove(os.path.join(out_dir, fname))
             del frames[fname]
+            candidate_boxes.get(track_id, {}).pop(fname, None)
     candidate_counts[track_id] = len(frames)
     sample_every[track_id] = sample_every.get(track_id, 1) * 2
 
@@ -156,6 +167,10 @@ def write_manifest(candidates_dir, video_path, fps, detect_every):
         "tracks": {
             str(track_id): frames
             for track_id, frames in sorted(candidate_frames.items())
+        },
+        "boxes": {
+            str(track_id): boxes
+            for track_id, boxes in sorted(candidate_boxes.items())
         },
     }
     with open(os.path.join(candidates_dir, MANIFEST_NAME), "w") as f:
@@ -175,7 +190,7 @@ def main():
     stale = os.path.join(args.candidates_dir, MANIFEST_NAME)
     if os.path.exists(stale):
         os.remove(stale)
-    model = YOLO("yolo26m.pt")
+    model = YOLO(YOLO_WEIGHTS)
     fps, detect_every = people_tracking(model, args.video, args.candidates_dir)
     write_manifest(args.candidates_dir, args.video, fps, detect_every)
     total = sum(candidate_counts.values())
