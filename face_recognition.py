@@ -10,19 +10,19 @@ from retinaface import RetinaFace
 CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
 FACES_DIR = os.path.join("database", "faces_cfc_reid")
 FACE_CONFIDENCE_THRESHOLD = 0.92
-# Tight margin used only to measure sharpness for ranking candidates.
+# Margen ajustado que solo se usa para medir la nitidez al ordenar los candidatos.
 FACE_MARGIN = 0.25
-# Margins of the saved image, as fractions of the face box. Wider than the
-# ranking crop so the result shows head and shoulders, not just the face.
+# Márgenes de la imagen guardada, como fracción de la caja del rostro. Son más anchos
+# que los del recorte de ordenamiento para que se vean cabeza y hombros, no solo la cara.
 OUTPUT_MARGIN_SIDE = 0.8
 OUTPUT_MARGIN_TOP = 0.6
 OUTPUT_MARGIN_BOTTOM = 1.8
-# Border added around each crop before face detection, as a fraction of its size.
+# Borde que se agrega a cada recorte antes de detectar rostros, como fracción de su tamaño.
 DETECT_PADDING = 0.2
 RANKING = "quality"
-# Written by tracking.py; maps each crop to its frame index in the video.
+# Lo escribe tracking.py; relaciona cada recorte con su índice de fotograma en el video.
 MANIFEST_NAME = "manifest.json"
-# Written here for worker.py: one entry per track with a saved face.
+# Se escribe aquí para worker.py: una entrada por track con rostro guardado.
 RESULTS_NAME = "results.json"
 
 
@@ -36,7 +36,7 @@ def crop_face(pixel_array, facial_area, side, top, bottom):
     bw, bh = x2 - x1, y2 - y1
     mx = int(bw * side)
 
-    # Clamped to the person crop from stage 1, so the box never leaves it.
+    # Se acota al recorte de persona de la etapa 1, así la caja nunca sale de él.
     h, w = pixel_array.shape[:2]
     x1, y1 = max(0, x1 - mx), max(0, y1 - int(bh * top))
     x2, y2 = min(w, x2 + mx), min(h, y2 + int(bh * bottom))
@@ -47,8 +47,9 @@ def crop_face(pixel_array, facial_area, side, top, bottom):
 
 
 def best_face(pixel_array):
-    # RetinaFace misses faces that touch the crop border (close-ups where the
-    # face fills the person box), so detect on a padded copy and map back.
+    # RetinaFace no detecta rostros que tocan el borde del recorte (primeros planos en
+    # los que la cara llena la caja de la persona), así que se detecta sobre una copia
+    # con borde y la caja se lleva de vuelta al recorte original.
     h, w = pixel_array.shape[:2]
     pad = int(DETECT_PADDING * max(h, w))
     padded = cv2.copyMakeBorder(
@@ -120,8 +121,8 @@ def process_track(track_id, folder, faces_dir):
             best_name = fname
 
     if best is None:
-        print(f"[{track_id}] no face above {FACE_CONFIDENCE_THRESHOLD} "
-              f"in {checked} candidates")
+        print(f"[{track_id}] ningún rostro supera {FACE_CONFIDENCE_THRESHOLD} "
+              f"en {checked} candidatos")
         return None
 
     output_dir = os.path.join(faces_dir, str(track_id))
@@ -130,9 +131,9 @@ def process_track(track_id, folder, faces_dir):
     cv2.imwrite(os.path.join(output_dir, face_name), best["face"])
 
     fh, fw = best["face"].shape[:2]
-    print(f"[{track_id}] best = {best_name} | score {best['score']:.4f} | "
-          f"face {fw}x{fh} | sharpness {best['sharpness']:.1f} "
-          f"({checked} candidates checked)")
+    print(f"[{track_id}] mejor = {best_name} | score {best['score']:.4f} | "
+          f"rostro {fw}x{fh} | nitidez {best['sharpness']:.1f} "
+          f"({checked} candidatos revisados)")
     return {
         "track_id": track_id,
         "face_file": os.path.join(str(track_id), face_name),
@@ -145,9 +146,9 @@ def load_manifest(candidates_dir):
     path = os.path.join(candidates_dir, MANIFEST_NAME)
     if not os.path.isfile(path):
         return None
-    # tracking.py writes the manifest after its last crop. A crop newer than
-    # the manifest came from a later run (e.g. tracking_results.py), so the
-    # frame indices would be wrong for it.
+    # tracking.py escribe el manifest después de su último recorte. Un recorte más
+    # nuevo que el manifest viene de una ejecución posterior (p. ej. tracking_results.py),
+    # así que sus índices de fotograma estarían mal.
     written = os.path.getmtime(path)
     for track_id in os.listdir(candidates_dir):
         folder = os.path.join(candidates_dir, track_id)
@@ -155,15 +156,15 @@ def load_manifest(candidates_dir):
             continue
         for fname in os.listdir(folder):
             if os.path.getmtime(os.path.join(folder, fname)) > written:
-                print(f"Ignoring stale {MANIFEST_NAME}: crops are newer; "
-                      f"video times will be empty")
+                print(f"Se ignora {MANIFEST_NAME} desactualizado: hay recortes más nuevos; "
+                      f"los tiempos del video quedarán vacíos")
                 return None
     with open(path) as f:
         return json.load(f)
 
 
 def add_video_time(face, manifest):
-    """Attach frame index and seconds into the video, if stage 1 recorded them."""
+    """Agrega el índice de fotograma y el segundo del video, si la etapa 1 los registró."""
     face["frame_idx"] = None
     face["time_s"] = None
     if manifest is None:
@@ -177,7 +178,7 @@ def add_video_time(face, manifest):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Stage 2: best face per track")
+    parser = argparse.ArgumentParser(description="Etapa 2: mejor rostro por track")
     parser.add_argument("--candidates-dir", default=CANDIDATES_DIR)
     parser.add_argument("--faces-dir", default=FACES_DIR)
     return parser.parse_args()
@@ -186,7 +187,7 @@ def parse_args():
 def main():
     args = parse_args()
     if not os.path.isdir(args.candidates_dir):
-        print(f"No candidates in {args.candidates_dir} — run tracking.py first")
+        print(f"No hay candidatos en {args.candidates_dir}; primero ejecute tracking.py")
         return
 
     manifest = load_manifest(args.candidates_dir)
@@ -206,8 +207,8 @@ def main():
     with open(os.path.join(args.faces_dir, RESULTS_NAME), "w") as f:
         json.dump({"tracks_checked": total, "faces": faces}, f, indent=2)
 
-    print(f"\nSaved a face for {len(faces)} of {total} tracked people "
-          f"in {args.faces_dir}")
+    print(f"\nSe guardó un rostro para {len(faces)} de {total} personas seguidas "
+          f"en {args.faces_dir}")
 
 
 if __name__ == "__main__":

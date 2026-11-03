@@ -1,36 +1,36 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 
-# TrackTrack defaults for mode="track"
-# Multi-cue tracker with HMIoU, iterative assignment, and track-aware initialization
-# Paper: "Focusing on Tracks for Online Multi-Object Tracking" (CVPR 2025)
-# Docs: https://docs.ultralytics.com/modes/track
+# Valores de TrackTrack para mode="track"
+# Tracker de varias señales con HMIoU, asignación iterativa e inicialización según los tracks
+# Artículo: "Focusing on Tracks for Online Multi-Object Tracking" (CVPR 2025)
+# Documentación: https://docs.ultralytics.com/modes/track
 
-tracker_type: tracktrack # (str) Tracker backend: tracktrack
-track_high_thresh: 0.6 # (float) High-confidence detection threshold
-track_low_thresh: 0.25 # (float) Low-confidence detection threshold for second stage
-new_track_thresh: 0.7 # (float) Minimum score to start a new track via track-aware initialization (TAI)
-track_buffer: 30 # (int) Frames to keep lost tracks alive
-match_thresh: 0.7 # (float) Initial matching threshold for iterative assignment
-lost_match_thr: 0.0 # (float) Looser rebind cost gate for still-Lost tracks; 0 disables the relaxed second pass. Raise above match_thresh (e.g. 0.9) for long-occlusion scenes
+tracker_type: tracktrack # (str) Backend del tracker: tracktrack
+track_high_thresh: 0.6 # (float) Umbral de detección de alta confianza
+track_low_thresh: 0.25 # (float) Umbral de detección de baja confianza para la segunda etapa
+new_track_thresh: 0.7 # (float) Puntaje mínimo para iniciar un track nuevo con la inicialización según los tracks (TAI)
+track_buffer: 30 # (int) Fotogramas durante los que se mantienen vivos los tracks perdidos
+match_thresh: 0.7 # (float) Umbral inicial de asociación para la asignación iterativa
+lost_match_thr: 0.0 # (float) Umbral de costo más permisivo para reasociar tracks que siguen perdidos; 0 desactiva esa segunda pasada. Subirlo por encima de match_thresh (p. ej. 0.9) en escenas con oclusiones largas
 
-# Association weights
-iou_weight: 0.5 # (float) Weight for HMIoU distance in cost matrix
-reid_weight: 0.5 # (float) Weight for cosine distance (or HMIoU fallback if no ReID)
-conf_weight: 0.1 # (float) Weight for confidence distance
-angle_weight: 0.05 # (float) Weight for corner angle distance
+# Pesos de asociación
+iou_weight: 0.5 # (float) Peso de la distancia HMIoU en la matriz de costos
+reid_weight: 0.5 # (float) Peso de la distancia coseno (o de HMIoU si no hay ReID)
+conf_weight: 0.1 # (float) Peso de la distancia de confianza
+angle_weight: 0.05 # (float) Peso de la distancia de ángulo de las esquinas
 
-# Iterative assignment
-penalty_p: 0.2 # (float) Cost penalty for low-confidence detections
-penalty_q: 0.4 # (float) Cost penalty for deleted/recovered detections
-reduce_step: 0.05 # (float) Threshold reduction per iteration
+# Asignación iterativa
+penalty_p: 0.2 # (float) Penalización de costo para detecciones de baja confianza
+penalty_q: 0.4 # (float) Penalización de costo para detecciones eliminadas o recuperadas
+reduce_step: 0.05 # (float) Reducción del umbral en cada iteración
 
-# Track-Aware Initialization (TAI)
-tai_thr: 0.55 # (float) IoU threshold for TAI NMS suppression
-min_track_len: 1 # (int) Minimum history length before track is confirmed. 1 because detection runs every 0.5 s: requiring 3 sightings dropped everyone on screen for less than ~1.5 s
+# Inicialización según los tracks (TAI)
+tai_thr: 0.55 # (float) Umbral de IoU para la supresión NMS de TAI
+min_track_len: 1 # (int) Largo mínimo del historial antes de confirmar el track. 1 porque la detección corre cada 0.5 s: pedir 3 apariciones descartaba a todos los que estaban en pantalla menos de ~1.5 s
 
-# Camera motion compensation
-gmc_method: sparseOptFlow # (str) GMC method: sparseOptFlow, orb, sift, ecc, none
+# Compensación del movimiento de la cámara
+gmc_method: sparseOptFlow # (str) Método GMC: sparseOptFlow, orb, sift, ecc, none
 
 # ReID
-with_reid: True # (bool) Enable ReID feature matching
-model: yolo26m-reid.onnx # (str) ReID model path; 'auto' uses native YOLO features
+with_reid: True # (bool) Activa la asociación por características ReID
+model: yolo26m-reid.onnx # (str) Ruta del modelo ReID; 'auto' usa las características propias de YOLO

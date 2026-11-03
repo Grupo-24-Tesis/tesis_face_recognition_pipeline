@@ -11,14 +11,14 @@ inicialización de las bibliotecas nativas).
 
 ```
                      venvs/track (solo PyTorch)             venvs/faces (solo TensorFlow)
-┌───────────┐   ┌──────────────────────────────┐   ┌───────────────────────────────────┐
-│ input.mkv │──▶│ tracking.py                  │──▶│ face_recognition.py               │
-└───────────┘   │ Seguimiento de personas      │   │ Detección de rostros              │
-                │ con YOLO26m + ReID           │   │ con RetinaFace                    │
-                │ 1 de cada 30 fotogramas      │   │ evalúa TODOS los candidatos       │
-                │ guarda recortes candidatos   │   │ guarda el MEJOR rostro por persona│
-                └──────────────┬───────────────┘   └───────────────┬───────────────────┘
-                               ▼                                   ▼
++-----------+   +------------------------------+   +-----------------------------------+
+| input.mkv |-->| tracking.py                  |-->| face_recognition.py               |
++-----------+   | Seguimiento de personas      |   | Detección de rostros              |
+                | con YOLO26m + ReID           |   | con RetinaFace                    |
+                | 1 de cada 30 fotogramas      |   | evalúa TODOS los candidatos       |
+                | guarda recortes candidatos   |   | guarda el MEJOR rostro por persona|
+                +--------------+---------------+   +---------------+-------------------+
+                               v                                   v
                  database/candidates/<id>/*.jpg      database/faces/<id>/face_of_<id>.jpg
                                                      (entrada para DeepFace, mismo venv)
 ```
@@ -38,12 +38,12 @@ deberían funcionar, pero esta es la referencia:
 | GPU | NVIDIA **Tesla T4**, 16 GiB de VRAM (capacidad de cómputo 7.5) |
 | SO | Ubuntu 22.04 |
 | Python | 3.12 |
-| Driver NVIDIA | 580.173.02 (sirve cualquier driver compatible con CUDA ≥ 12.6 — comprueba `nvidia-smi`) |
+| Driver NVIDIA | 580.173.02 (sirve cualquier driver compatible con CUDA ≥ 12.6; comprueba `nvidia-smi`) |
 | Almacenamiento | El repo vive en el volumen EBS secundario montado en `/data` (115 GB). Mantén ≥ 40 GB libres: los dos venvs suman ≈ 14 GB, más los pesos de los modelos y las salidas. |
 
 Dos cosas que parecen erróneas pero son correctas en esta máquina:
 
-- `nvidia-smi` dice `CUDA Version: 13.0` — ese es el **máximo del driver**, no lo
+- `nvidia-smi` dice `CUDA Version: 13.0`: ese es el **máximo del driver**, no lo
   que usamos. Los venvs incluyen su propio espacio de usuario CUDA **12.6**.
 - `nvcc` no está instalado y **no hace falta**. Nunca ejecutes
   `sudo apt install nvidia-cuda-toolkit`.
@@ -54,22 +54,22 @@ Dos cosas que parecen erróneas pero son correctas en esta máquina:
 
 ```
 FaceRecognition/
-├── tracking.py               # Etapa 1: seguimiento con YOLO26m → recortes candidatos
-├── face_recognition.py       # Etapa 2: RetinaFace sobre los candidatos → rostros guardados
-├── run.sh                    # Ejecuta ambas etapas en orden
-├── custom_tracktrack.yaml    # Configuración del tracker de Ultralytics
-├── requirements-track.txt    # Deps congeladas de venvs/track (incrusta el índice cu126 de torch)
-├── requirements-faces.txt    # Deps congeladas de venvs/faces
-├── README.md                 # Este fichero
-├── .gitignore
-│
-│  # Presentes en local, NO versionados (ver la siguiente sección):
-├── venvs/                    # los dos entornos virtuales (generados)
-├── database/                 # salidas del pipeline (generadas)
-├── yolo26m.pt                # pesos de YOLO (descargados)
-├── yolo26m-reid.onnx         # codificador ReID (descargado)
-├── tracked.mp4               # vídeo anotado opcional (generado)
-└── *.mkv / *.mp4             # vídeo(s) de entrada (aportados por el usuario)
+|-- tracking.py               # Etapa 1: seguimiento con YOLO26m -> recortes candidatos
+|-- face_recognition.py       # Etapa 2: RetinaFace sobre los candidatos -> rostros guardados
+|-- run.sh                    # Ejecuta ambas etapas en orden
+|-- custom_tracktrack.yaml    # Configuración del tracker de Ultralytics
+|-- requirements-track.txt    # Deps congeladas de venvs/track (incrusta el índice cu126 de torch)
+|-- requirements-faces.txt    # Deps congeladas de venvs/faces
+|-- README.md                 # Este fichero
+|-- .gitignore
+|
+|  # Presentes en local, NO versionados (ver la siguiente sección):
+|-- venvs/                    # los dos entornos virtuales (generados)
+|-- database/                 # salidas del pipeline (generadas)
+|-- yolo26m.pt                # pesos de YOLO (descargados)
+|-- yolo26m-reid.onnx         # codificador ReID (descargado)
+|-- tracked.mp4               # vídeo anotado opcional (generado)
+`-- *.mkv / *.mp4             # vídeo(s) de entrada (aportados por el usuario)
 ```
 
 `face_recognition_pipeline.py` (si aún conservas una copia) es la versión
@@ -100,7 +100,7 @@ cualquier fotograma. Esa pausa es normal, no es un cuelgue.
 
 Desde la raíz del repo (`/data/FaceRecognition`):
 
-### Opción A — desde los ficheros de requisitos congelados (preferida)
+### Opción A: desde los ficheros de requisitos congelados (preferida)
 
 ```bash
 python3 -m venv venvs/track
@@ -114,13 +114,13 @@ venvs/faces/bin/pip install -r requirements-faces.txt
 
 `requirements-track.txt` incrusta `--extra-index-url https://download.pytorch.org/whl/cu126`
 en su primera línea para que pip descargue la **compilación de PyTorch para CUDA
-12.6**. Esa línea es estructural — no la elimines (PyPI a secas sirve un torch para
+12.6**. Esa línea es estructural, no la elimines (PyPI a secas sirve un torch para
 CUDA 13 que rompe el entorno).
 
-### Opción B — desde cero (si los ficheros de requisitos están obsoletos)
+### Opción B: desde cero (si los ficheros de requisitos están obsoletos)
 
 ```bash
-# Entorno de tracking — SOLO familia PyTorch. TensorFlow nunca debe entrar en este venv.
+# Entorno de tracking: SOLO familia PyTorch. TensorFlow nunca debe entrar en este venv.
 python3 -m venv venvs/track
 venvs/track/bin/pip install --upgrade pip
 venvs/track/bin/pip install torch==2.13.0 torchvision==0.28.0 \
@@ -130,7 +130,7 @@ venvs/track/bin/pip install onnxruntime          # ejecuta el codificador ReID .
 venvs/track/bin/pip uninstall -y opencv-python opencv-python-headless
 venvs/track/bin/pip install opencv-python-headless
 
-# Entorno de rostros — SOLO familia TensorFlow. torch nunca debe entrar en este venv.
+# Entorno de rostros: SOLO familia TensorFlow. torch nunca debe entrar en este venv.
 python3 -m venv venvs/faces
 venvs/faces/bin/pip install --upgrade pip
 venvs/faces/bin/pip install "tensorflow[and-cuda]==2.21.*"
@@ -141,7 +141,7 @@ venvs/faces/bin/pip install opencv-python-headless
 
 El par desinstalar/reinstalar de opencv al final de cada bloque es deliberado: varias
 dependencias arrastran `opencv-python`, y cada venv debe contener **exactamente un**
-build de cv2 — el headless (esto es un servidor; no hay pantalla).
+build de cv2: el headless (esto es un servidor; no hay pantalla).
 
 **Sobre `onnxruntime`:** el codificador ReID solo corre en la etapa 1, así que
 `onnxruntime` va **únicamente** en `venvs/track`. Usamos la variante CPU a propósito:
@@ -187,15 +187,15 @@ Coloca tu vídeo en la raíz del repo, ajusta `VIDEO_PATH` en `tracking.py` y lu
 que equivale a:
 
 ```bash
-venvs/track/bin/python tracking.py          # etapa 1: vídeo → database/candidates/
-venvs/faces/bin/python face_recognition.py  # etapa 2: candidatos → database/faces/
+venvs/track/bin/python tracking.py          # etapa 1: vídeo -> database/candidates/
+venvs/faces/bin/python face_recognition.py  # etapa 2: candidatos -> database/faces/
 ```
 
-Nunca uses `source venv/bin/activate` + `python3` a secas — lanzar los scripts a
+Nunca uses `source venv/bin/activate` + `python3` a secas: lanzar los scripts a
 través de la ruta del intérprete es lo que garantiza que cada uno se ejecute sobre el
 stack correcto.
 
-### Etapa 1 — seguimiento (`tracking.py`)
+### Etapa 1: seguimiento (`tracking.py`)
 
 El script **es dueño de su propio bucle de lectura** con `cv2.VideoCapture`; no le
 pasa el vídeo entero a Ultralytics. Solo 1 de cada `DETECT_EVERY` fotogramas llega al
@@ -218,7 +218,7 @@ mantiene el estado del tracker entre llamadas sucesivas.
 como el modelo solo ve 1 de cada 30, contar fotogramas ya no tendría sentido. El
 tiempo real entre recortes es `DETECT_EVERY × SAMPLE_EVERY_STEPS / fps` segundos.
 
-### Etapa 2 — rostros (`face_recognition.py`)
+### Etapa 2: rostros (`face_recognition.py`)
 
 Para cada persona, la etapa 2 pasa **todos** sus candidatos por RetinaFace, descarta
 los que no superan el umbral de confianza y se queda con el mejor. Guarda el recorte
@@ -227,7 +227,7 @@ ajustado al rostro (no el cuerpo completo) en
 
 | Parámetro | Valor por defecto | Efecto |
 |---|---|---|
-| `FACE_CONFIDENCE_THRESHOLD` | `0.92` | Confianza mínima de RetinaFace (escala 0–1, **no** porcentaje) |
+| `FACE_CONFIDENCE_THRESHOLD` | `0.92` | Confianza mínima de RetinaFace (escala de 0 a 1, **no** porcentaje) |
 | `FACE_MARGIN` | `0.25` | Margen alrededor de la caja del rostro, como fracción de su tamaño |
 | `RANKING` | `"quality"` | `"quality"` ordena por tamaño del rostro ponderado por nitidez; `"score"` usa la confianza cruda |
 
@@ -315,7 +315,7 @@ venvs/faces/bin/python your_embedding_script.py
 ```
 
 Dentro de él, `DeepFace.represent(...)` / `DeepFace.verify(...)` con
-`detector_backend="retinaface"` son seguros — todo el proceso es solo TF.
+`detector_backend="retinaface"` son seguros: todo el proceso es solo TF.
 
 Como la etapa 2 ya entrega el rostro recortado con margen, puedes pasar
 `detector_backend="skip"` si quieres evitar una segunda detección redundante.

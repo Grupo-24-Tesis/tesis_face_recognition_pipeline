@@ -1,26 +1,26 @@
-# Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+# Ultralytics AGPL-3.0 License - https://ultralytics.com/license
 
-# Deep OC-SORT tracker defaults for mode="track"
-# Paper: https://arxiv.org/abs/2302.11813
-# Docs: https://docs.ultralytics.com/modes/track
+# Valores de Deep OC-SORT para mode="track"
+# Artículo: https://arxiv.org/abs/2302.11813
+# Documentación: https://docs.ultralytics.com/modes/track
 
-tracker_type: deepocsort # (str) Tracker backend: Deep OC-SORT with appearance features and GMC
-track_high_thresh: 0.3 # (float) First-stage match threshold; raise for cleaner tracks, lower to keep more
-track_low_thresh: 0.1 # (float) Second-stage threshold for low-score matches; used with use_byte=True
-new_track_thresh: 0.3 # (float) Start a new track if no match ≥ this; higher reduces false tracks
-track_buffer: 30 # (int) Frames to keep lost tracks alive; higher handles occlusion, increases ID switches risk
-match_thresh: 0.8 # (float) Association similarity threshold (IoU/cost); tune with detector quality
-fuse_score: True # (bool) Fuse detection score with motion/IoU for matching; stabilizes weak detections
+tracker_type: deepocsort # (str) Backend del tracker: Deep OC-SORT con características de apariencia y GMC
+track_high_thresh: 0.3 # (float) Umbral de asociación de la primera etapa; más alto da tracks más limpios, más bajo conserva más
+track_low_thresh: 0.1 # (float) Umbral de la segunda etapa para asociaciones de bajo puntaje; se usa con use_byte=True
+new_track_thresh: 0.3 # (float) Inicia un track nuevo si ninguna asociación alcanza este valor; más alto reduce los tracks falsos
+track_buffer: 30 # (int) Fotogramas durante los que se mantienen vivos los tracks perdidos; más alto tolera oclusiones pero aumenta el riesgo de cambios de ID
+match_thresh: 0.8 # (float) Umbral de similitud de asociación (IoU/costo); se ajusta según la calidad del detector
+fuse_score: True # (bool) Combina el puntaje de detección con movimiento/IoU al asociar; estabiliza las detecciones débiles
 
-# OC-SORT specifics (inherited)
-delta_t: 3 # (int) Temporal window for velocity direction computation in OCM
-inertia: 0.2 # (float) Weight of velocity consistency cost in association
-use_byte: False # (bool) Enable ByteTrack-style low-confidence second association pass
+# Propios de OC-SORT (heredados)
+delta_t: 3 # (int) Ventana temporal para calcular la dirección de la velocidad en OCM
+inertia: 0.2 # (float) Peso del costo de consistencia de velocidad en la asociación
+use_byte: False # (bool) Activa una segunda pasada de asociación de baja confianza al estilo ByteTrack
 
-# Deep OC-SORT specifics
-gmc_method: none # (str) Global motion compensation: sparseOptFlow|orb|sift|ecc|none; enable for moving-camera scenes
-with_reid: False # (bool) Enable ReID model use; needs extra model and compute
-model: yolo26m-reid.onnx # (str) ReID model name/path; "auto" uses detector features when available. Otherwise an exported file (.torchscript / .onnx / .engine / …) or a `.pt` checkpoint.
-proximity_thresh: 0.5 # (float) Min IoU to consider tracks proximate for ReID; higher is stricter
-appearance_thresh: 0.9 # (float) Min appearance similarity for ReID; raise to avoid identity swaps
-alpha_fixed_emb: 0.95 # (float) Base EMA factor for track embedding updates; higher = slower update
+# Propios de Deep OC-SORT
+gmc_method: none # (str) Compensación global de movimiento: sparseOptFlow|orb|sift|ecc|none; se activa en escenas con cámara en movimiento
+with_reid: False # (bool) Activa el modelo ReID; requiere un modelo adicional y más cómputo
+model: yolo26m-reid.onnx # (str) Nombre o ruta del modelo ReID; "auto" usa las características del detector cuando están disponibles. Si no, un archivo exportado (.torchscript / .onnx / .engine) o un checkpoint `.pt`.
+proximity_thresh: 0.5 # (float) IoU mínimo para considerar cercanos dos tracks en ReID; más alto es más estricto
+appearance_thresh: 0.9 # (float) Similitud de apariencia mínima para ReID; más alta evita intercambios de identidad
+alpha_fixed_emb: 0.95 # (float) Factor EMA base para actualizar el embedding del track; más alto actualiza más lento

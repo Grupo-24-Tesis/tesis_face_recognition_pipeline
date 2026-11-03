@@ -23,7 +23,7 @@ last_saved_step = {}
 def people_tracking():
     cap = cv2.VideoCapture(VIDEO_PATH)
     if not cap.isOpened():
-        raise RuntimeError(f"Could not open video: {VIDEO_PATH}")
+        raise RuntimeError(f"No se pudo abrir el video: {VIDEO_PATH}")
 
     writer = None
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -68,10 +68,10 @@ def people_tracking():
                     )
                     if not writer.isOpened():
                         raise RuntimeError(
-                            f"Could not open video writer for {OUTPUT_VIDEO} "
+                            f"No se pudo abrir el escritor de video para {OUTPUT_VIDEO} "
                             f"({FOURCC}, {aw}x{ah} @ {out_fps:.2f} fps)"
                         )
-                    print(f"Writing {OUTPUT_VIDEO}: {aw}x{ah} @ {out_fps:.2f} fps")
+                    print(f"Escribiendo {OUTPUT_VIDEO}: {aw}x{ah} @ {out_fps:.2f} fps")
                 writer.write(annotated)
 
             if r.boxes is None or r.boxes.id is None:
@@ -119,11 +119,11 @@ def main():
     people_tracking()
     total = sum(candidate_counts.values())
     print(
-        f"Saved {total} candidate crops for {len(candidate_counts)} people "
-        f"in {CANDIDATES_DIR}"
+        f"Se guardaron {total} recortes candidatos de {len(candidate_counts)} personas "
+        f"en {CANDIDATES_DIR}"
     )
     if SAVE_VIDEO:
-        print(f"Annotated video written to {OUTPUT_VIDEO}")
+        print(f"Video anotado escrito en {OUTPUT_VIDEO}")
 
 
 if __name__ == "__main__":

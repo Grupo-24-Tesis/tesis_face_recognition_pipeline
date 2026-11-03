@@ -1,50 +1,50 @@
-# ── Virtual environments (rebuild from requirements-*.txt, never commit) ──
+# Entornos virtuales (se reconstruyen desde requirements-*.txt, nunca se suben)
 venv/
 venvs/
 .venv/
 
-# ── Python artifacts ──
+# Archivos generados por Python
 __pycache__/
 *.pyc
 *.pyo
 
-# ── Model weights (auto-downloaded at runtime; see README "Files NOT in this repo") ──
+# Pesos de modelos (se descargan al ejecutar; ver en el README los ficheros que no están en el repo)
 *.pt
 *.pth
 *.onnx
 *.h5
 *.tflite
 
-# ── Input media (user-provided, never committed) ──
+# Videos de entrada (los aporta el usuario, nunca se suben)
 *.mkv
 *.mp4
 *.avi
 *.mov
 *.webm
 
-# ── Images (pipeline outputs live in database/; repo carries no image assets) ──
-# If you ever need an image committed (e.g., docs/), whitelist it explicitly:
+# Imágenes (las salidas del pipeline van en database/; el repo no incluye imágenes)
+# Si alguna vez hace falta subir una imagen (p. ej. en docs/), se agrega de forma explícita:
 #   !docs/diagram.png
 *.jpg
 *.jpeg
 *.png
 *.bmp
 
-# ── Pipeline outputs ──
+# Salidas del pipeline
 database/
 runs/
 
-# ── Secrets (worker AWS / backend settings; variables listed in worker.py) ──
+# Secretos (configuración de AWS y del backend para el worker; variables en worker.py)
 .env
 
-# ── Logs / scratch ──
+# Logs y archivos temporales
 *.log
 crash.log
 requirements_vm.txt
 core
 core.*
 
-# ── OS / editor noise ──
+# Sistema operativo y editor
 .DS_Store
 .idea/
 .vscode/

@@ -2,7 +2,7 @@
 set -e
 cd "$(dirname "$0")"
 
-# Load AWS / backend settings from .env if present (variables: top of worker.py).
+# Carga la configuración de AWS y del backend desde .env si existe (las variables están al inicio de worker.py).
 if [ -f .env ]; then
   set -a; . ./.env; set +a
 fi
