@@ -14,8 +14,8 @@ match_thresh: 0.7 # (float) Umbral inicial de asociación para la asignación it
 lost_match_thr: 0.0 # (float) Umbral de costo más permisivo para reasociar tracks que siguen perdidos; 0 desactiva esa segunda pasada. Subirlo por encima de match_thresh (p. ej. 0.9) en escenas con oclusiones largas
 
 # Pesos de asociación
-iou_weight: 0.5 # (float) Peso de la distancia HMIoU en la matriz de costos
-reid_weight: 0.5 # (float) Peso de la distancia coseno (o de HMIoU si no hay ReID)
+iou_weight: 0.3 # (float) Peso de la distancia HMIoU en la matriz de costos
+reid_weight: 0.7 # (float) Peso de la distancia coseno (o de HMIoU si no hay ReID)
 conf_weight: 0.1 # (float) Peso de la distancia de confianza
 angle_weight: 0.05 # (float) Peso de la distancia de ángulo de las esquinas
 
@@ -26,7 +26,7 @@ reduce_step: 0.05 # (float) Reducción del umbral en cada iteración
 
 # Inicialización según los tracks (TAI)
 tai_thr: 0.55 # (float) Umbral de IoU para la supresión NMS de TAI
-min_track_len: 1 # (int) Largo mínimo del historial antes de confirmar el track. 1 porque la detección corre cada 0.5 s: pedir 3 apariciones descartaba a todos los que estaban en pantalla menos de ~1.5 s
+min_track_len: 3 # (int) Largo mínimo del historial antes de confirmar el track
 
 # Compensación del movimiento de la cámara
 gmc_method: sparseOptFlow # (str) Método GMC: sparseOptFlow, orb, sift, ecc, none

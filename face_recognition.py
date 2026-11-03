@@ -18,9 +18,9 @@ OUTPUT_MARGIN_SIDE = 0.8
 OUTPUT_MARGIN_TOP = 0.6
 OUTPUT_MARGIN_BOTTOM = 1.8
 # Borde que se agrega a cada recorte antes de detectar rostros, como fracción de su tamaño.
-DETECT_PADDING = 0.2
+DETECT_PADDING = 0.8
 RETINA_ALLOW_UPSCALING = True
-MIN_FACE_PX = 0
+MIN_FACE_PX = 12
 RANKING = "quality"
 # Lo escribe tracking.py; relaciona cada recorte con su índice de fotograma en el video.
 MANIFEST_NAME = "manifest.json"

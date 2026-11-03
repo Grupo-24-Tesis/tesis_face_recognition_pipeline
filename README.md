@@ -208,7 +208,7 @@ mantiene el estado del tracker entre llamadas sucesivas.
 | `VIDEO_PATH` | nombre del vídeo de demo | Vídeo de entrada |
 | `TRACKER` | `custom_tracktrack.yaml` | Configuración del tracker de Ultralytics |
 | `DETECT_EVERY` | `30` | Fotogramas del vídeo entre inferencias. `30` ≈ 1 inferencia por segundo a 30 fps |
-| `MAX_CANDIDATES` | `10` | Recortes de persona guardados por ID de seguimiento |
+| `MAX_CANDIDATES` | `40` | Recortes de persona guardados por ID de seguimiento |
 | `SAMPLE_EVERY_STEPS` | `1` | Pasos **procesados** (no fotogramas del vídeo) entre recortes guardados de la misma persona. Con `1`, se guarda un recorte en cada inferencia |
 | `SAVE_VIDEO` | `True` | Escribe un vídeo anotado para inspeccionar los IDs. Ponlo en `False` en producción |
 | `OUTPUT_VIDEO` | `tracked.mp4` | Ruta del vídeo anotado |
@@ -230,6 +230,23 @@ ajustado al rostro (no el cuerpo completo) en
 | `FACE_CONFIDENCE_THRESHOLD` | `0.92` | Confianza mínima de RetinaFace (escala de 0 a 1, **no** porcentaje) |
 | `FACE_MARGIN` | `0.25` | Margen alrededor de la caja del rostro, como fracción de su tamaño |
 | `RANKING` | `"quality"` | `"quality"` ordena por tamaño del rostro ponderado por nitidez; `"score"` usa la confianza cruda |
+| `MIN_FACE_PX` | `12` | Lado menor mínimo del rostro, en píxeles. Los rostros más pequeños se descartan |
+
+#### Tamaño mínimo de rostro: `MIN_FACE_PX = 12`
+
+Este es el valor con el que se trabaja. Los rostros de menos de 12 px no permiten
+reconocer a nadie y en las cámaras reales aparecen con frecuencia. En las pruebas
+con los tres videos (cámara 6 día 1, cámara 6 otro día y cámara 3):
+
+- No se pierde ninguna persona en ninguno de los tres videos.
+- En el video del otro día de la cámara 6 desaparecen los rostros duplicados de una
+  misma persona y un recorte que no era un rostro: la salida pasa de 8 a 5 rostros.
+- En los otros dos videos la salida no cambia.
+- Un mínimo de 16 px ya es demasiado: en la cámara 3 deja sin detectar más de la
+  mitad de los rostros.
+
+El detalle de estas pruebas está en el repositorio `tesis-experiments` (pruebas
+DET-05 y E2E-03).
 
 El criterio por defecto es `área_del_rostro × √nitidez` (nitidez = varianza del
 Laplaciano). La confianza de RetinaFace se satura cerca de 0.99 y apenas discrimina

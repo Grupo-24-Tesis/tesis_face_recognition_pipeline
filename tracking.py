@@ -14,7 +14,7 @@ DETECT_INTERVAL_S = 0.5
 # Recortes que se guardan por persona. Cuando un track llega al tope se descarta
 # uno de cada dos recortes y su intervalo de muestreo se duplica, así los recortes
 # cubren todo el tiempo que la persona está en pantalla y no solo sus primeros segundos.
-MAX_CANDIDATES = 10
+MAX_CANDIDATES = 40
 # Dos fotogramas analizados seguidos cuyos histogramas de color correlacionan por
 # debajo de este valor son un corte de escena (videos editados o de celular). Ahí se
 # reinicia el tracker para que personas de escenas distintas nunca queden en un mismo
