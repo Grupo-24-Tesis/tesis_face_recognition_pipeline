@@ -55,10 +55,10 @@ puede retomar con video de mayor resolución (decisión D001 en `tesis-experimen
 |---|---|
 | Instancia | AWS EC2 **g4dn.xlarge** (4 vCPU, 16 GiB de RAM) |
 | GPU | NVIDIA **Tesla T4**, 16 GiB de VRAM (capacidad de cómputo 7.5) |
-| SO | Ubuntu 24.04 |
-| Python | 3.12 |
+| SO | Ubuntu 24.04 o 26.04 |
+| Python | 3.12.3. Ubuntu 26.04 trae 3.14 y no sirve: ver "Ubuntu 26.04" en Instalación |
 | Driver NVIDIA | 580.178.04 (sirve cualquier driver compatible con CUDA 12.6 o superior) |
-| Almacenamiento | El repo vive en el volumen montado en `/data` (118 GB). Los dos venvs ocupan unos 14 GB, más los pesos de los modelos y las salidas. |
+| Almacenamiento | El repo vive en `/data/TesisFaceRecognition`, en un volumen EBS. El disco NVMe de instancia de la g4dn no sirve: se borra al detener la instancia. Los venvs ocupan unos 14 GB, más los pesos de los modelos y las salidas. |
 
 Dos cosas que parecen erróneas pero son correctas:
 
@@ -128,22 +128,46 @@ modelos. Esa pausa es normal.
 
 Desde la raíz del repo (`/data/TesisFaceRecognition/tesis_face_recognition_pipeline`).
 
+### Ubuntu 26.04: driver y Python 3.12
+
+Ubuntu 26.04 no trae el driver de NVIDIA ni Python 3.12. El driver usa los módulos ya
+compilados para el kernel de AWS, y Python 3.12.3 se instala con uv en `/opt/python`:
+
+```bash
+sudo apt-get install -y linux-modules-nvidia-580-server-aws nvidia-headless-no-dkms-580-server nvidia-utils-580-server
+sudo reboot
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo mkdir -p /opt/python && sudo chown ubuntu:ubuntu /opt/python
+UV_PYTHON_INSTALL_DIR=/opt/python ~/.local/bin/uv python install 3.12.3
+printf '#!/bin/sh\nexec /opt/python/cpython-3.12.3-linux-x86_64-gnu/bin/python3.12 "$@"\n' | sudo tee /usr/local/bin/python3.12
+sudo chmod 755 /usr/local/bin/python3.12
+```
+
+`/usr/local/bin/python3.12` tiene que ser ese script y no un enlace simbólico: con un
+enlace, los venvs que se crean desde él no encuentran la biblioteca estándar. Después
+`nvidia-smi` debe mostrar la T4 y el resto de la instalación es igual que en 24.04.
+
+Si los venvs se copian desde otra máquina en lugar de crearse, en cada uno `bin/python3`
+debe apuntar a `/opt/python/cpython-3.12.3-linux-x86_64-gnu/bin/python3.12`, y `home` de
+`pyvenv.cfg` a la carpeta `bin` de esa instalación.
+
 ### Opción A: desde los archivos de requisitos congelados (preferida)
 
 ```bash
-python3 -m venv venvs/track
+python3.12 -m venv venvs/track
 venvs/track/bin/pip install --upgrade pip
 venvs/track/bin/pip install -r requirements-track.txt
 venvs/track/bin/pip uninstall -y opencv-python opencv-python-headless
 venvs/track/bin/pip install --no-deps opencv-python-headless==5.0.0.93
 
-python3 -m venv venvs/faces
+python3.12 -m venv venvs/faces
 venvs/faces/bin/pip install --upgrade pip
 venvs/faces/bin/pip install -r requirements-faces.txt
 venvs/faces/bin/pip uninstall -y opencv-python opencv-python-headless
 venvs/faces/bin/pip install --no-deps opencv-python-headless==5.0.0.93
 
-python3 -m venv venvs/worker
+python3.12 -m venv venvs/worker
 venvs/worker/bin/pip install -r requirements-worker.txt
 ```
 
@@ -166,7 +190,7 @@ el `python3` del sistema.
 (regla 1). `onnxruntime-gpu` y `onnx` son para el codificador ReID `.onnx` en CUDA 12.
 
 ```bash
-python3 -m venv venvs/track
+python3.12 -m venv venvs/track
 venvs/track/bin/pip install --upgrade pip
 venvs/track/bin/pip install torch==2.13.0 torchvision==0.28.0 \
   --index-url https://download.pytorch.org/whl/cu126
@@ -175,7 +199,7 @@ venvs/track/bin/pip install onnxruntime-gpu==1.26.0 onnx
 venvs/track/bin/pip uninstall -y opencv-python opencv-python-headless
 venvs/track/bin/pip install --no-deps opencv-python-headless
 
-python3 -m venv venvs/faces
+python3.12 -m venv venvs/faces
 venvs/faces/bin/pip install --upgrade pip
 venvs/faces/bin/pip install "tensorflow[and-cuda]==2.21.*"
 venvs/faces/bin/pip install retina-face tf-keras deepface
