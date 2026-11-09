@@ -91,21 +91,17 @@ la carga de TensorFlow y de los pesos.
 
 ## Estructura del repositorio
 
-```
-tesis_face_recognition_pipeline/
-|-- tracking.py               # Etapa 1: seguimiento de personas y recortes candidatos
-|-- face_recognition.py       # Etapa 2: mejor rostro por persona
-|-- worker.py                 # Conexión con el backend (SQS, S3 y API)
-|-- run_worker.sh             # Lanza worker.py con la configuración de .env
-|-- run.sh                    # Corre las dos etapas sobre un video y escribe un video anotado
-|-- custom_tracktrack.yaml    # Configuración del tracker que se usa
-|-- custom_deepocsort.yaml    # Configuración de Deep OC-SORT, probada antes y sin uso
-|-- requirements-track.txt    # Dependencias congeladas de venvs/track (incluye el índice cu126 de torch)
-|-- requirements-faces.txt    # Dependencias congeladas de venvs/faces
-|-- requirements-worker.txt   # Dependencias de venvs/worker (solo boto3)
-|-- README.md
-`-- .gitignore
-```
+| Archivo | Contenido |
+|---|---|
+| `tracking.py` | Etapa 1: seguimiento de personas y recortes candidatos |
+| `face_recognition.py` | Etapa 2: mejor rostro por persona |
+| `worker.py` | Conexión con el backend (SQS, S3 y API) |
+| `run_worker.sh` | Lanza `worker.py` con la configuración de `.env` |
+| `run.sh` | Corre las dos etapas sobre un video y escribe un video anotado |
+| `custom_tracktrack.yaml` | Configuración del tracker |
+| `requirements-track.txt` | Dependencias congeladas de `venvs/track` (incluye el índice cu126 de torch) |
+| `requirements-faces.txt` | Dependencias congeladas de `venvs/faces` |
+| `requirements-worker.txt` | Dependencias de `venvs/worker` (boto3) |
 
 No versionados: `venvs/`, `database/`, `.env`, `yolo26m.pt`, `yolo26m-reid.onnx` y los
 videos de entrada.
@@ -166,18 +162,19 @@ el `python3` del sistema.
 
 ### Opción B: desde cero (si los archivos de requisitos están obsoletos)
 
+`venvs/track` lleva solo la familia PyTorch y `venvs/faces` solo la familia TensorFlow
+(regla 1). `onnxruntime-gpu` y `onnx` son para el codificador ReID `.onnx` en CUDA 12.
+
 ```bash
-# Entorno de tracking: SOLO familia PyTorch. TensorFlow nunca debe entrar en este venv.
 python3 -m venv venvs/track
 venvs/track/bin/pip install --upgrade pip
 venvs/track/bin/pip install torch==2.13.0 torchvision==0.28.0 \
   --index-url https://download.pytorch.org/whl/cu126
 venvs/track/bin/pip install ultralytics lap
-venvs/track/bin/pip install onnxruntime-gpu==1.26.0 onnx   # codificador ReID .onnx en CUDA 12
+venvs/track/bin/pip install onnxruntime-gpu==1.26.0 onnx
 venvs/track/bin/pip uninstall -y opencv-python opencv-python-headless
 venvs/track/bin/pip install --no-deps opencv-python-headless
 
-# Entorno de rostros: SOLO familia TensorFlow. torch nunca debe entrar en este venv.
 python3 -m venv venvs/faces
 venvs/faces/bin/pip install --upgrade pip
 venvs/faces/bin/pip install "tensorflow[and-cuda]==2.21.*"
@@ -199,13 +196,16 @@ reinstalar `opencv-python` (rompe la regla 3).
 
 ```bash
 venvs/track/bin/python -c "import torch, cv2; print(torch.__version__, torch.cuda.is_available(), cv2.__version__)"
-# esperado: 2.13.0+cu126 True 5.0.0
-
 venvs/track/bin/python -c "import torch, onnxruntime as ort; s = ort.InferenceSession('yolo26m-reid.onnx', providers=['CUDAExecutionProvider']); print(ort.__version__, s.get_providers())"
-# esperado: 1.26.0 ['CUDAExecutionProvider', 'CPUExecutionProvider']
-
 venvs/faces/bin/python -c "import face_recognition, tensorflow as tf; print(tf.__version__, tf.config.list_physical_devices('GPU'))"
-# esperado: 2.21.0 [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
+```
+
+Salida esperada, en el mismo orden:
+
+```
+2.13.0+cu126 True 5.0.0
+1.26.0 ['CUDAExecutionProvider', 'CPUExecutionProvider']
+2.21.0 [PhysicalDevice(name='/physical_device:GPU:0', device_type='GPU')]
 ```
 
 La segunda y la tercera se corren desde la raíz del repo (usan `yolo26m-reid.onnx` y
@@ -275,14 +275,18 @@ Manejo de fallos:
 - Antes de tomar un mensaje consulta `GET /api/health`. Mientras el backend no responde,
   deja los trabajos en la cola.
 - Errores transitorios (5xx, red, una etapa que falla): el mensaje queda en la cola y SQS
-  lo vuelve a entregar.
+  lo vuelve a entregar al vencer el visibility timeout. Una dead-letter queue limita los
+  reintentos.
 - Errores permanentes (mensaje mal formado, video inexistente, 4xx del backend): el
-  mensaje se descarta.
+  mensaje se descarta. `jobId` forma parte de rutas locales y de S3, así que solo se
+  aceptan letras, números, `_` y `-`, hasta 64 caracteres.
 - Si el pipeline terminó pero el POST falló, se conserva solo `payload.json` y la
   siguiente entrega lo reenvía sin repetir las etapas.
 - Un heartbeat extiende la visibilidad del mensaje mientras corre el trabajo, y cada
   etapa se corta tras `STAGE_TIMEOUT`.
-- Con SIGTERM termina el trabajo en curso antes de salir.
+- Con SIGTERM termina el trabajo en curso antes de salir. Cada etapa corre en su propia
+  sesión, así que la señal no la corta a mitad de camino. Con systemd se usa
+  `KillMode=mixed` y un `TimeoutStopSec` mayor que la duración de un trabajo.
 
 ### Un video local, sin AWS ni backend
 
@@ -301,7 +305,8 @@ venvs/faces/bin/python face_recognition.py --candidates-dir database/candidates 
 ```
 
 Conviene usar una carpeta de candidatos vacía: `tracking.py` no borra los recortes de una
-ejecución anterior y la etapa 2 los mezclaría. `--video` es obligatorio; sin las otras
+ejecución anterior y la etapa 2 los mezclaría. Si hay recortes más nuevos que
+`manifest.json`, la etapa 2 ignora el manifest y `frame_idx` y `time_s` quedan vacíos. `--video` es obligatorio; sin las otras
 opciones se usan `database/candidates_cfc_reid` y `database/faces_cfc_reid`.
 
 Nunca se usa `source venv/bin/activate` + `python3`: lanzar cada script con el intérprete
