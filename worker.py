@@ -1,21 +1,3 @@
-"""Worker de la cola: trabajo de video del backend -> pipeline de dos etapas -> resultados al backend.
-
-Corre en venvs/worker (solo boto3) y nunca importa torch ni TensorFlow: cada
-etapa corre como subproceso con el intérprete de su propio venv, igual que run.sh.
-
-    venvs/worker/bin/python worker.py                   # consulta SQS sin parar
-    venvs/worker/bin/python worker.py --local VIDEO     # procesa un video e imprime el payload
-
-Flujo por mensaje (enviado por SqsVideoJobPublisher del backend):
-  1. descarga s3://<bucket>/<objectKey> en database/jobs/<jobId>/
-  2. tracking.py         (venvs/track) -> candidates/ + manifest.json
-  3. face_recognition.py (venvs/faces) -> faces/ + results.json
-  4. sube cada rostro a s3://<bucket>/<FACES_S3_PREFIX>/<jobId>/<trackId>.jpg
-  5. POST /api/video-jobs/<jobId>/results y luego borra el mensaje
-
-Un trabajo fallido deja su mensaje en la cola, así que SQS lo vuelve a entregar
-cuando vence el visibility timeout (una dead-letter queue limita los reintentos).
-"""
 import argparse
 import json
 import logging
@@ -41,30 +23,21 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-2")
 QUEUE_URL = os.environ.get("AWS_SQS_QUEUE_URL", "")
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8080").rstrip("/")
 FACES_S3_PREFIX = os.environ.get("FACES_S3_PREFIX", "faces").strip("/")
-# URL base desde la que el frontend carga las imágenes de rostros. Por defecto es la
-# URL S3 del propio bucket, que solo funciona si <FACES_S3_PREFIX>/ es de lectura pública.
 FACES_URL_BASE = os.environ.get("FACES_URL_BASE", "").rstrip("/")
-# Zona horaria del reloj de la cámara que fecha los nombres de los archivos exportados.
 CAMERA_TZ = ZoneInfo(os.environ.get("CAMERA_TZ", "America/Bogota"))
 KEEP_JOB_FILES = os.environ.get("KEEP_JOB_FILES", "0") == "1"
 
 EVENT_TYPE = "VIDEO_UPLOAD_READY"
-VISIBILITY_TIMEOUT = 300   # segundos que un mensaje recibido queda oculto para otros consumidores
-HEARTBEAT_EVERY = 120      # cada cuánto se extiende ese timeout mientras corre un trabajo
-POLL_WAIT = 20             # segundos de long-poll de SQS (el máximo que permite SQS)
+VISIBILITY_TIMEOUT = 300
+HEARTBEAT_EVERY = 120
+POLL_WAIT = 20
 POST_RETRIES = 5
-# Una etapa que dura más que esto se mata y el trabajo falla, para que un video
-# atascado no retenga la cola para siempre (el heartbeat lo ocultaría indefinidamente).
 STAGE_TIMEOUT = int(os.environ.get("STAGE_TIMEOUT", "7200"))
-POLL_ERROR_BACKOFF = 30    # segundos de espera tras un error de SQS o de red antes de volver a consultar
-BACKEND_WAIT = 15          # segundos entre chequeos de salud mientras el backend no responde
-# Resultados de una ejecución terminada cuyo POST falló; una nueva entrega solo los reenvía.
+POLL_ERROR_BACKOFF = 30
+BACKEND_WAIT = 15
 PAYLOAD_NAME = "payload.json"
 
-# Las exportaciones del NVR como Camera_ch5_20260824100831_20260824102210.mp4 llevan el
-# inicio de la grabación como YYYYMMDDHHMMSS; el primer grupo de ese tipo es el inicio.
 RECORDING_START_RE = re.compile(r"(?<!\d)(\d{14})(?!\d)")
-# Los ObjectId de Mongo son hexadecimales; ningún otro valor puede volverse parte de una ruta.
 JOB_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 log = logging.getLogger("worker")
@@ -72,7 +45,7 @@ stopping = threading.Event()
 
 
 class JobError(Exception):
-    """El mensaje nunca se podrá procesar; reintentar no sirve."""
+    pass
 
 
 def recording_start(file_name):
@@ -86,7 +59,6 @@ def recording_start(file_name):
 
 
 def parse_instant(value):
-    """Interpreta el createdAt del mensaje, que Jackson puede escribir como texto ISO o segundos epoch."""
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=timezone.utc)
     if isinstance(value, str) and value:
@@ -105,9 +77,6 @@ def video_timestamp(seconds):
 def run_stage(python, script, *args):
     cmd = [python, os.path.join(REPO_DIR, script), *args]
     log.info("ejecutando %s", " ".join(cmd))
-    # Sesión propia: un SIGTERM o Ctrl-C dirigido al worker no mata la etapa a mitad
-    # del trabajo; subprocess.run igual la mata si el propio worker falla.
-    # La salida de las etapas va al log para que el stdout de --local sea JSON puro.
     subprocess.run(cmd, cwd=REPO_DIR, check=True, stdout=sys.stderr,
                    timeout=STAGE_TIMEOUT, start_new_session=True)
 
@@ -124,10 +93,8 @@ def run_pipeline(video_path, job_dir):
 
 
 def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url):
-    """Convierte la salida de la etapa 2 en VideoResultRequest.appearances del backend."""
     start = recording_start(file_name)
     if start is None:
-        # Sin hora en el nombre del archivo: la hora de subida es la mejor estimación disponible.
         log.warning("no hay inicio de grabación en %r; capturedAt usa la hora "
                     "de subida", file_name)
 
@@ -137,14 +104,11 @@ def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url
         if start is not None and time_s is not None:
             captured_at = start + timedelta(seconds=time_s)
         else:
-            # El backend solo guarda la hora local (toLocalDateTime), así que el
-            # respaldo se expresa en la zona de la cámara, como las horas del nombre.
             captured_at = parse_instant(created_at).astimezone(CAMERA_TZ)
         appearances.append({
             "faceId": f"{job_id}_{face['track_id']}",
             "timestamp": video_timestamp(time_s) if time_s is not None else None,
             "frameUrl": frame_url(face, os.path.join(faces_dir, face["face_file"])),
-            # El backend lo interpreta con OffsetDateTime, así que el offset es obligatorio.
             "capturedAt": captured_at.isoformat(timespec="seconds"),
         })
     return appearances
@@ -164,7 +128,6 @@ def post_results(job_id, appearances):
                 return
         except urllib.error.HTTPError as exc:
             if exc.code < 500:
-                # p. ej. 404 "Job no encontrado"; repetir el trabajo no cambia eso
                 raise JobError(f"el backend rechazó los resultados: HTTP {exc.code}") from exc
             error = exc
         except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
@@ -185,7 +148,6 @@ def backend_reachable():
 
 
 class VisibilityHeartbeat:
-    """Mantiene oculto un mensaje mientras corre su trabajo, que puede ser largo."""
 
     def __init__(self, sqs, receipt_handle):
         self.sqs = sqs
@@ -236,7 +198,6 @@ def process_job(s3, msg):
     payload_path = os.path.join(job_dir, PAYLOAD_NAME)
 
     if os.path.isfile(payload_path):
-        # El pipeline ya corrió y subió los rostros; solo falló el POST.
         with open(payload_path) as f:
             appearances = json.load(f)
         log.info("[%s] se reutilizan los resultados de un intento anterior", job_id)
@@ -245,7 +206,6 @@ def process_job(s3, msg):
             shutil.rmtree(job_dir, ignore_errors=True)
         return
 
-    # Un trabajo reentregado empieza limpio, para que no se cuelen recortes de un intento fallido.
     shutil.rmtree(job_dir, ignore_errors=True)
     os.makedirs(job_dir)
     keep_for_retry = False
@@ -287,7 +247,6 @@ def process_job(s3, msg):
             raise
     finally:
         if keep_for_retry:
-            # Se conserva solo el payload para que el reintento no repita las dos etapas.
             for name in os.listdir(job_dir):
                 if name != PAYLOAD_NAME:
                     path = os.path.join(job_dir, name)
@@ -303,7 +262,6 @@ def delete_message(sqs, receipt):
     try:
         sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt)
     except Exception:
-        # El trabajo ya terminó; en el peor caso SQS lo entrega una vez más.
         log.exception("no se pudo borrar el mensaje de la cola")
 
 
@@ -312,7 +270,6 @@ def handle_message(sqs, s3, message):
     try:
         msg = parse_message(message["Body"])
     except JobError as exc:
-        # Reintentar un mensaje mal formado fallaría siempre; se descarta y queda en el log.
         log.error("se descarta el mensaje %s: %s", message.get("MessageId"), exc)
         delete_message(sqs, receipt)
         return
@@ -328,7 +285,6 @@ def handle_message(sqs, s3, message):
         delete_message(sqs, receipt)
         return
     except Exception:
-        # El mensaje se deja en la cola: SQS lo vuelve a entregar tras el visibility timeout.
         log.exception("[%s] el trabajo falló; se reintentará", msg["jobId"])
         return
 
@@ -347,7 +303,6 @@ def poll_forever():
     log.info("consultando %s (backend %s)", QUEUE_URL, BACKEND_URL)
     backend_down = False
     while not stopping.is_set():
-        # No se toman trabajos cuyos resultados no se podrían entregar.
         if not backend_reachable():
             if not backend_down:
                 log.warning("el backend %s no responde; se espera antes de tomar "
@@ -367,7 +322,6 @@ def poll_forever():
                 VisibilityTimeout=VISIBILITY_TIMEOUT,
             )
         except Exception:
-            # Corte de red, throttling o credenciales vencidas: el worker sigue vivo.
             log.exception("receive_message falló; nuevo intento en %ds", POLL_ERROR_BACKOFF)
             stopping.wait(POLL_ERROR_BACKOFF)
             continue
@@ -377,7 +331,6 @@ def poll_forever():
 
 
 def run_local(video_path, job_id):
-    """Procesa un video local de punta a punta sin AWS ni backend e imprime el payload."""
     job_dir = os.path.join(JOBS_DIR, job_id)
     shutil.rmtree(job_dir, ignore_errors=True)
     os.makedirs(job_dir)
@@ -390,7 +343,7 @@ def run_local(video_path, job_id):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser = argparse.ArgumentParser(description="Worker de la cola: procesa los videos del backend con el pipeline de dos etapas")
     parser.add_argument("--local", metavar="VIDEO",
                         help="procesa un video local e imprime el payload de resultados")
     parser.add_argument("--job-id", default="local-test",
@@ -402,8 +355,6 @@ def main():
     if args.local:
         run_local(args.local, args.job_id)
     else:
-        # Con SIGTERM se termina el trabajo actual en vez de cortar una subida. Con
-        # systemd se usa KillMode=mixed y un TimeoutStopSec mayor que un trabajo.
         signal.signal(signal.SIGTERM, lambda *_: stopping.set())
         poll_forever()
 

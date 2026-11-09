@@ -1,50 +1,39 @@
-# Entornos virtuales (se reconstruyen desde requirements-*.txt, nunca se suben)
 venv/
 venvs/
 .venv/
 
-# Archivos generados por Python
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
-# Pesos de modelos (se descargan al ejecutar; ver en el README los ficheros que no están en el repo)
 *.pt
 *.pth
 *.onnx
 *.h5
 *.tflite
 
-# Videos de entrada (los aporta el usuario, nunca se suben)
 *.mkv
 *.mp4
 *.avi
 *.mov
 *.webm
 
-# Imágenes (las salidas del pipeline van en database/; el repo no incluye imágenes)
-# Si alguna vez hace falta subir una imagen (p. ej. en docs/), se agrega de forma explícita:
-#   !docs/diagram.png
 *.jpg
 *.jpeg
 *.png
 *.bmp
 
-# Salidas del pipeline
 database/
 runs/
 
-# Secretos (configuración de AWS y del backend para el worker; variables en worker.py)
 .env
 
-# Logs y archivos temporales
 *.log
-crash.log
 requirements_vm.txt
 core
 core.*
 
-# Sistema operativo y editor
 .DS_Store
 .idea/
 .vscode/

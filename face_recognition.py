@@ -16,21 +16,15 @@ from retinaface import RetinaFace
 CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
 FACES_DIR = os.path.join("database", "faces_cfc_reid")
 FACE_CONFIDENCE_THRESHOLD = 0.92
-# Margen ajustado que solo se usa para medir la nitidez al ordenar los candidatos.
 FACE_MARGIN = 0.25
-# Márgenes de la imagen guardada, como fracción de la caja del rostro. Son más anchos
-# que los del recorte de ordenamiento para que se vean cabeza y hombros, no solo la cara.
 OUTPUT_MARGIN_SIDE = 0.8
 OUTPUT_MARGIN_TOP = 0.6
 OUTPUT_MARGIN_BOTTOM = 1.8
-# Borde que se agrega a cada recorte antes de detectar rostros, como fracción de su tamaño.
 DETECT_PADDING = 0.8
 RETINA_ALLOW_UPSCALING = True
 MIN_FACE_PX = 12
 RANKING = "quality"
-# Lo escribe tracking.py; relaciona cada recorte con su índice de fotograma en el video.
 MANIFEST_NAME = "manifest.json"
-# Se escribe aquí para worker.py: una entrada por track con rostro guardado.
 RESULTS_NAME = "results.json"
 
 
@@ -44,7 +38,6 @@ def crop_face(pixel_array, facial_area, side, top, bottom):
     bw, bh = x2 - x1, y2 - y1
     mx = int(bw * side)
 
-    # Se acota al recorte de persona de la etapa 1, así la caja nunca sale de él.
     h, w = pixel_array.shape[:2]
     x1, y1 = max(0, x1 - mx), max(0, y1 - int(bh * top))
     x2, y2 = min(w, x2 + mx), min(h, y2 + int(bh * bottom))
@@ -55,9 +48,6 @@ def crop_face(pixel_array, facial_area, side, top, bottom):
 
 
 def best_face(pixel_array):
-    # RetinaFace no detecta rostros que tocan el borde del recorte (primeros planos en
-    # los que la cara llena la caja de la persona), así que se detecta sobre una copia
-    # con borde y la caja se lleva de vuelta al recorte original.
     h, w = pixel_array.shape[:2]
     pad = int(DETECT_PADDING * max(h, w))
     padded = cv2.copyMakeBorder(
@@ -163,9 +153,6 @@ def load_manifest(candidates_dir):
     path = os.path.join(candidates_dir, MANIFEST_NAME)
     if not os.path.isfile(path):
         return None
-    # tracking.py escribe el manifest después de su último recorte. Un recorte más
-    # nuevo que el manifest viene de otra ejecución en la misma carpeta,
-    # así que sus índices de fotograma estarían mal.
     written = os.path.getmtime(path)
     for track_id in os.listdir(candidates_dir):
         folder = os.path.join(candidates_dir, track_id)
@@ -181,7 +168,6 @@ def load_manifest(candidates_dir):
 
 
 def add_video_time(face, manifest):
-    """Agrega el índice de fotograma y el segundo del video, si la etapa 1 los registró."""
     face["frame_idx"] = None
     face["time_s"] = None
     if manifest is None:

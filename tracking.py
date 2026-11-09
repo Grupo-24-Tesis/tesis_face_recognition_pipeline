@@ -2,35 +2,24 @@ import argparse
 import json
 import os
 import cv2
-from ultralytics import YOLO  # type: ignore
+from ultralytics import YOLO
 
-# Valores por defecto para ejecuciones manuales. worker.py los cambia en cada trabajo por argumentos.
 TRACKER = "custom_tracktrack.yaml"
 CANDIDATES_DIR = os.path.join("database", "candidates_cfc_reid")
-# Detección y tracking cada DETECT_INTERVAL_S segundos de video, sin importar los
-# fps (un número fijo de fotogramas daba 2 s entre análisis en cámaras de 15 fps).
 DETECT_INTERVAL_S = 0.5
-# Recortes que se guardan por persona. Cuando un track llega al tope se descarta
-# uno de cada dos recortes y su intervalo de muestreo se duplica, así los recortes
-# cubren todo el tiempo que la persona está en pantalla y no solo sus primeros segundos.
 MAX_CANDIDATES = 40
-# Dos fotogramas analizados seguidos cuyos histogramas de color correlacionan por
-# debajo de este valor son un corte de escena (videos editados o de celular). Ahí se
-# reinicia el tracker para que personas de escenas distintas nunca queden en un mismo
-# track. Las cámaras fijas quedan muy por encima.
 SCENE_CUT_CORRELATION = 0.5
 YOLO_WEIGHTS = "yolo26m.pt"
 YOLO_CONF = 0.1
 YOLO_IOU = 0.7
 YOLO_IMGSZ = 640
-# Se escribe junto a las carpetas de los tracks para que la etapa 2 sepa cuándo se tomó cada recorte.
 MANIFEST_NAME = "manifest.json"
 
-candidate_counts = {}   # track_id -> recortes guardados en este momento
-last_saved_step = {}    # track_id -> paso de procesamiento del último recorte guardado
-sample_every = {}       # track_id -> pasos entre recortes guardados (se duplica al podar)
-next_index = {}         # track_id -> número del próximo nombre de archivo de recorte
-candidate_frames = {}   # track_id -> {nombre del recorte: índice del fotograma en el video}
+candidate_counts = {}
+last_saved_step = {}
+sample_every = {}
+next_index = {}
+candidate_frames = {}
 candidate_boxes = {}
 
 
@@ -48,18 +37,16 @@ def people_tracking(model, video_path, candidates_dir, annotated_path=None):
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     detect_every = max(1, round(fps * DETECT_INTERVAL_S))
-    frame_idx = -1   # índice en el video original
-    step = -1        # índice de los fotogramas en los que se corrió el modelo
+    frame_idx = -1
+    step = -1
     prev_hist = None
-    id_offset = 0    # mantiene únicos los IDs de track cuando un reinicio los vuelve a empezar en 1
+    id_offset = 0
     max_id = 0
     cuts = 0
     writer = None
 
     try:
         while True:
-            # grab() avanza el decodificador sin decodificar el fotograma completo,
-            # así los fotogramas que se saltan casi no cuestan.
             if not cap.grab():
                 break
             frame_idx += 1
@@ -86,8 +73,8 @@ def people_tracking(model, video_path, candidates_dir, annotated_path=None):
             results = model.track(
                 source=frame,
                 tracker=TRACKER,
-                persist=True,     # conserva el estado del tracker entre llamadas
-                classes=[0],      # solo sigue la clase "person"
+                persist=True,
+                classes=[0],
                 conf=YOLO_CONF,
                 iou=YOLO_IOU,
                 imgsz=YOLO_IMGSZ,
@@ -105,12 +92,11 @@ def people_tracking(model, video_path, candidates_dir, annotated_path=None):
                         raise RuntimeError(f"No se pudo abrir el escritor de video para {annotated_path}")
                 writer.write(plotted)
 
-            # los ids pueden ser None antes de que el tracker los asigne
             if r.boxes is None or r.boxes.id is None:
                 continue
 
-            boxes = r.boxes.xyxy.cpu().numpy().astype(int)      # type: ignore
-            track_ids = r.boxes.id.cpu().numpy().astype(int)    # type: ignore
+            boxes = r.boxes.xyxy.cpu().numpy().astype(int)
+            track_ids = r.boxes.id.cpu().numpy().astype(int)
 
             h, w = frame.shape[:2]
 
@@ -118,18 +104,16 @@ def people_tracking(model, video_path, candidates_dir, annotated_path=None):
                 track_id = int(track_id) + id_offset
                 max_id = max(max_id, track_id)
 
-                # Se muestrea en el tiempo para que los candidatos cubran poses distintas
                 every = sample_every.get(track_id, 1)
                 prev = last_saved_step.get(track_id, -every)
                 if step - prev < every:
                     continue
 
-                # Se acotan las coordenadas para que el recorte nunca salga de la imagen
                 x1, y1 = max(0, x1), max(0, y1)
                 x2, y2 = min(w, x2), min(h, y2)
 
                 if x2 <= x1 or y2 <= y1:
-                    continue  # caja degenerada, no hay nada que recortar
+                    continue
 
                 person_crop = frame[y1:y2, x1:x2]
 
@@ -159,7 +143,6 @@ def people_tracking(model, video_path, candidates_dir, annotated_path=None):
 
 
 def thin_candidates(track_id, out_dir):
-    """Descarta uno de cada dos recortes de un track lleno y reduce a la mitad su frecuencia de muestreo."""
     frames = candidate_frames[track_id]
     for i, fname in enumerate(sorted(frames)):
         if i % 2 == 1:
@@ -199,7 +182,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    # Un manifest de una ejecución anterior no debe describir los recortes de esta.
     stale = os.path.join(args.candidates_dir, MANIFEST_NAME)
     if os.path.exists(stale):
         os.remove(stale)
