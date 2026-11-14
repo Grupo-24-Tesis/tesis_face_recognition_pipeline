@@ -4,7 +4,8 @@ Encuentra a las personas que aparecen en un video de CCTV y entrega el mejor ros
 cada una. La etapa 1 sigue a las personas con **YOLO26m** y el tracker TrackTrack con
 ReID (Ultralytics). La etapa 2 busca rostros con **RetinaFace** en los recortes de cada
 persona y guarda el mejor. `worker.py` conecta el pipeline con el backend: recibe los
-videos por SQS, sube los rostros a S3 y envía los resultados a la API.
+videos por una cola de SQS, sube los rostros a S3 y devuelve los resultados por otra cola
+de SQS.
 
 Las dos etapas corren en **procesos y entornos virtuales separados**. No es una
 decisión de estilo: PyTorch y TensorFlow en un mismo proceso terminan en segfault en
@@ -95,7 +96,7 @@ la carga de TensorFlow y de los pesos.
 |---|---|
 | `tracking.py` | Etapa 1: seguimiento de personas y recortes candidatos |
 | `face_recognition.py` | Etapa 2: mejor rostro por persona |
-| `worker.py` | Conexión con el backend (SQS, S3 y API) |
+| `worker.py` | Conexión con el backend (SQS y S3) |
 | `run_worker.sh` | Lanza `worker.py` con la configuración de `.env` |
 | `run.sh` | Corre las dos etapas sobre un video y escribe un video anotado |
 | `custom_tracktrack.yaml` | Configuración del tracker |
@@ -256,25 +257,53 @@ consulta SQS sin parar. Variables:
 | Variable | Valor por defecto | Uso |
 |---|---|---|
 | `AWS_SQS_QUEUE_URL` | (obligatoria) | Cola donde el backend publica los trabajos |
+| `AWS_SQS_RESULTS_QUEUE_URL` | (obligatoria) | Cola donde el worker publica el avance, los resultados y los fallos |
 | `AWS_REGION` | `us-east-2` | Región de SQS y S3 |
-| `BACKEND_URL` | `http://localhost:8080` | API del backend |
 | `FACES_S3_PREFIX` | `faces` | Carpeta del bucket donde se suben los rostros |
-| `FACES_URL_BASE` | (vacía) | URL base de las imágenes para el frontend. Vacía, se usa la URL S3 del bucket, que solo funciona si esa carpeta es pública |
+| `FACES_URL_BASE` | (vacía) | URL base de las imágenes. Debe quedar vacía: el backend solo acepta la URL S3 del bucket y entrega al frontend una URL prefirmada |
 | `CAMERA_TZ` | `America/Bogota` | Zona horaria del reloj de las cámaras |
 | `KEEP_JOB_FILES` | `0` | Con `1` se conservan los archivos de cada trabajo en `database/jobs/` |
 | `STAGE_TIMEOUT` | `7200` | Segundos máximos por etapa |
+| `MAX_ATTEMPTS` | `3` | Entregas de un mismo trabajo antes de darlo por fallido |
+
+El worker y el backend no se conectan entre sí: solo hablan con SQS y S3. Por eso pueden
+estar en máquinas distintas, sin IP fija ni puertos abiertos, y el worker puede arrancar
+antes o después que el backend.
+
+Permisos de AWS que necesita el worker, mejor con un rol de IAM asociado a la instancia
+que con llaves en disco:
+
+- `sqs:ReceiveMessage`, `sqs:DeleteMessage` y `sqs:ChangeMessageVisibility` sobre la cola
+  de trabajos.
+- `sqs:SendMessage` sobre la cola de resultados.
+- `s3:GetObject` sobre `videos/*` y `s3:PutObject` sobre `faces/*` en el bucket.
 
 Flujo por mensaje `VIDEO_UPLOAD_READY` (lo publica `SqsVideoJobPublisher` del backend):
 
-1. Descarga `s3://<bucket>/<objectKey>` en `database/jobs/<jobId>/`.
-2. Corre `tracking.py` (venvs/track) y `face_recognition.py` (venvs/faces).
-3. Sube cada rostro a `s3://<bucket>/<FACES_S3_PREFIX>/<jobId>/<trackId>.jpg`.
-4. Envía `POST /api/video-jobs/<jobId>/results` y borra el mensaje de la cola.
+1. Publica `VIDEO_PROCESSING_STARTED` en la cola de resultados.
+2. Descarga `s3://<bucket>/<objectKey>` en `database/jobs/<jobId>/`.
+3. Corre `tracking.py` (venvs/track) y `face_recognition.py` (venvs/faces).
+4. Sube cada rostro a `s3://<bucket>/<FACES_S3_PREFIX>/<jobId>/<trackId>.jpg`.
+5. Publica `VIDEO_PROCESSING_COMPLETED` con los rostros y borra el mensaje de la cola de
+   trabajos.
 
-Payload que recibe el backend (`VideoResultRequest`):
+Eventos que publica el worker en la cola de resultados (los consume
+`SqsVideoResultListener` del backend):
+
+| `eventType` | Cuándo | Campos propios |
+|---|---|---|
+| `VIDEO_PROCESSING_STARTED` | Al tomar el trabajo y cada 120 s mientras corre | ninguno |
+| `VIDEO_PROCESSING_COMPLETED` | Al terminar | `appearances` |
+| `VIDEO_PROCESSING_FAILED` | Cuando el trabajo se descarta | `reason` |
+
+Todos llevan `eventVersion`, `jobId` y `sentAt` (UTC, ISO-8601). Ejemplo:
 
 ```json
 {
+  "eventType": "VIDEO_PROCESSING_COMPLETED",
+  "eventVersion": "1",
+  "jobId": "<jobId>",
+  "sentAt": "2026-10-16T15:12:40.512345Z",
   "appearances": [
     {
       "faceId": "<jobId>_<trackId>",
@@ -291,23 +320,26 @@ Payload que recibe el backend (`VideoResultRequest`):
 - `capturedAt`: ISO-8601 con offset, como exige `OffsetDateTime.parse`. Es el inicio de
   la grabación tomado del nombre del archivo del NVR (`Camera_chN_YYYYMMDDHHMMSS...`) más
   `timestamp`; si el nombre no tiene la hora o falta el tiempo del rostro, se usa la hora
-  de subida. Siempre en
-  `CAMERA_TZ`.
+  de subida. Siempre en `CAMERA_TZ`.
+- Un evento no puede pasar de 256 KiB, el tamaño que admite cualquier cola de SQS. Caben
+  unos mil rostros por video; si hay más, el trabajo se reporta como fallido.
 
 Manejo de fallos:
 
-- Antes de tomar un mensaje consulta `GET /api/health`. Mientras el backend no responde,
-  deja los trabajos en la cola.
-- Errores transitorios (5xx, red, una etapa que falla): el mensaje queda en la cola y SQS
-  lo vuelve a entregar al vencer el visibility timeout. Una dead-letter queue limita los
-  reintentos.
-- Errores permanentes (mensaje mal formado, video inexistente, 4xx del backend): el
-  mensaje se descarta. `jobId` forma parte de rutas locales y de S3, así que solo se
-  aceptan letras, números, `_` y `-`, hasta 64 caracteres.
-- Si el pipeline terminó pero el POST falló, se conserva solo `payload.json` y la
-  siguiente entrega lo reenvía sin repetir las etapas.
-- Un heartbeat extiende la visibilidad del mensaje mientras corre el trabajo, y cada
-  etapa se corta tras `STAGE_TIMEOUT`.
+- Errores transitorios (red, una etapa que falla): el mensaje queda en la cola y SQS lo
+  vuelve a entregar al vencer el visibility timeout. En la entrega número `MAX_ATTEMPTS`
+  el worker publica `VIDEO_PROCESSING_FAILED` con el motivo y borra el mensaje.
+- Errores permanentes (mensaje mal formado, video inexistente, resultados que no caben en
+  un evento): el worker publica `VIDEO_PROCESSING_FAILED` y borra el mensaje. `jobId`
+  forma parte de rutas locales y de S3, así que solo se aceptan letras, números, `_` y
+  `-`, hasta 64 caracteres; un mensaje sin un `jobId` así se borra sin avisar.
+- Si no se puede publicar `VIDEO_PROCESSING_FAILED`, el mensaje queda en la cola para
+  avisar en la siguiente entrega.
+- Si el pipeline terminó pero no se pudo publicar el resultado, se conserva solo
+  `payload.json` y la siguiente entrega lo reenvía sin repetir las etapas.
+- Un heartbeat extiende la visibilidad del mensaje y publica `VIDEO_PROCESSING_STARTED`
+  cada 120 s mientras corre el trabajo. El backend da por fallido un trabajo que deja de
+  reportar avance. Cada etapa se corta tras `STAGE_TIMEOUT`.
 - Con SIGTERM termina el trabajo en curso antes de salir. Cada etapa corre en su propia
   sesión, así que la señal no la corta a mitad de camino. Con systemd se usa
   `KillMode=mixed` y un `TimeoutStopSec` mayor que la duración de un trabajo.
