@@ -1,11 +1,22 @@
 # Pipeline de reconocimiento facial (YOLO26 + RetinaFace)
 
 Encuentra a las personas que aparecen en un video de CCTV y entrega el mejor rostro de
-cada una. La etapa 1 sigue a las personas con **YOLO26m** y el tracker TrackTrack con
-ReID (Ultralytics). La etapa 2 busca rostros con **RetinaFace** en los recortes de cada
-persona y guarda el mejor. `worker.py` conecta el pipeline con el backend: recibe los
-videos por una cola de SQS, sube los rostros a S3 y devuelve los resultados por otra cola
-de SQS.
+cada una. Hay dos modos, que se eligen con la variable `PIPELINE_MODE`:
+
+| Modo | Identidad | Scripts | Venvs |
+| --- | --- | --- | --- |
+| `faces` (por defecto) | Por rostro: agrupa los rostros del video con embeddings de **GhostFaceNet** | `face_identities.py` e `identity_linking.py` | `venvs/faces` |
+| `tracks` | Por track del cuerpo: **YOLO26m** + TrackTrack con ReID y un rostro por track | `tracking.py` y `face_recognition.py` | `venvs/track` y `venvs/faces` |
+
+`worker.py` conecta el pipeline con el backend: recibe los videos por una cola de SQS,
+sube los rostros a S3 y devuelve los resultados por otra cola de SQS. Los dos modos
+escriben el mismo `results.json`, así que el worker y el backend no cambian. El modo
+`faces` se describe en "Modo faces: identidad por rostro"; el resto del documento
+describe el modo `tracks`.
+
+En el modo `tracks` la etapa 1 sigue a las personas con **YOLO26m** y el tracker
+TrackTrack con ReID (Ultralytics). La etapa 2 busca rostros con **RetinaFace** en los
+recortes de cada persona y guarda el mejor.
 
 Las dos etapas corren en **procesos y entornos virtuales separados**. No es una
 decisión de estilo: PyTorch y TensorFlow en un mismo proceso terminan en segfault en
@@ -29,13 +40,13 @@ de su propio venv y nunca importa torch ni TensorFlow.
 
 ---
 
-## Configuración vigente
+## Configuración vigente (modo `tracks`)
 
 Ajustada con las pruebas del repositorio `tesis-experiments` sobre tres videos (cámara 6
 en dos días distintos y cámara 3):
 
 | Qué | Valor | Dónde |
-|---|---|---|
+| --- | --- | --- |
 | Tracker | TrackTrack con ReID `yolo26m-reid.onnx`, `iou_weight` 0.3, `reid_weight` 0.7, `min_track_len` 3, `match_thresh` 0.7 | `custom_tracktrack.yaml` |
 | Muestreo | 1 fotograma analizado cada 0.5 s | `DETECT_INTERVAL_S` en `tracking.py` |
 | Recortes por persona | 40 | `MAX_CANDIDATES` en `tracking.py` |
@@ -47,13 +58,14 @@ Cada persona seguida entrega como máximo un rostro, y la identidad es por video
 reconocimiento de la misma persona entre videos: con estas cámaras (960x480, rostros de
 unos 21 px de mediana) los embeddings no distinguen personas mejor que el azar. Se
 puede retomar con video de mayor resolución (decisión D001 en `tesis-experiments`).
+La configuración del modo `faces` está en "Modo faces: identidad por rostro".
 
 ---
 
 ## Máquina objetivo
 
 | Componente | Valor |
-|---|---|
+| --- | --- |
 | Instancia | AWS EC2 **g4dn.xlarge** (4 vCPU, 16 GiB de RAM) |
 | GPU | NVIDIA **Tesla T4**, 16 GiB de VRAM (capacidad de cómputo 7.5) |
 | SO | Ubuntu 24.04 o 26.04 |
@@ -72,10 +84,11 @@ Dos cosas que parecen erróneas pero son correctas:
 ### Qué corre en la GPU
 
 | Modelo | Dispositivo | Qué lo hace posible |
-|---|---|---|
+| --- | --- | --- |
 | YOLO26m (etapa 1) | GPU | torch 2.13.0+cu126 |
 | Codificador ReID (etapa 1) | GPU | `onnxruntime-gpu==1.26.0`, compilado para CUDA 12 (ver Instalación) |
 | RetinaFace (etapa 2) | GPU | `face_recognition.py` precarga `libcusolver` antes de importar TensorFlow |
+| RetinaFace y GhostFaceNet (modo `faces`) | GPU | `face_identities.py` hace la misma precarga |
 
 TensorFlow 2.21 trae un error de empaquetado: su cargador de librerías no busca en
 `nvidia/cusolver/lib`, aunque el paquete está instalado en el venv. Sin la precarga
@@ -93,12 +106,14 @@ la carga de TensorFlow y de los pesos.
 ## Estructura del repositorio
 
 | Archivo | Contenido |
-|---|---|
-| `tracking.py` | Etapa 1: seguimiento de personas y recortes candidatos |
-| `face_recognition.py` | Etapa 2: mejor rostro por persona |
+| --- | --- |
+| `face_identities.py` | Modo `faces`: detecta, alinea y agrupa los rostros del video y guarda el mejor de cada identidad |
+| `identity_linking.py` | Modo `faces`: agrupación de rostros en identidades (solo numpy) |
+| `tracking.py` | Modo `tracks`, etapa 1: seguimiento de personas y recortes candidatos |
+| `face_recognition.py` | Modo `tracks`, etapa 2: mejor rostro por persona |
 | `worker.py` | Conexión con el backend (SQS y S3) |
 | `run_worker.sh` | Lanza `worker.py` con la configuración de `.env` |
-| `run.sh` | Corre las dos etapas sobre un video y escribe un video anotado |
+| `run.sh` | Corre el modo elegido sobre un video y escribe un video anotado |
 | `custom_tracktrack.yaml` | Configuración del tracker |
 | `requirements-track.txt` | Dependencias congeladas de `venvs/track` (incluye el índice cu126 de torch) |
 | `requirements-faces.txt` | Dependencias congeladas de `venvs/faces` |
@@ -112,11 +127,12 @@ videos de entrada.
 ## Archivos que no están en el repo
 
 | Archivo | Cómo obtenerlo |
-|---|---|
+| --- | --- |
 | Video de entrada (`*.mp4`, `*.mkv`) | Lo aporta el usuario. Con el worker llega desde S3. |
 | `yolo26m.pt` (unos 44 MB) | Ultralytics lo descarga en la raíz del repo en la primera ejecución de `tracking.py`. |
 | `yolo26m-reid.onnx` (unos 48 MB) | Ultralytics lo descarga la primera vez que el tracker corre con `with_reid: True`. También se puede bajar a mano desde [ultralytics/assets](https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m-reid.onnx). |
-| Pesos de RetinaFace (unos 120 MB) | Se descargan en `~/.deepface/weights/` en la primera ejecución de `face_recognition.py` (o en `$DEEPFACE_HOME/.deepface/weights/` si esa variable está definida). |
+| Pesos de RetinaFace (unos 120 MB) | Se descargan en `~/.deepface/weights/` en la primera ejecución de `face_recognition.py` o de `face_identities.py` (o en `$DEEPFACE_HOME/.deepface/weights/` si esa variable está definida). |
+| Pesos de GhostFaceNet (unos 17 MB) | DeepFace los descarga en la misma carpeta (`ghostfacenet_v1.h5`) en la primera ejecución de `face_identities.py`. |
 | `.env` | Configuración del worker (ver más abajo). Nunca se sube. |
 | `database/`, `venvs/` | Los crean la instalación y el propio pipeline. |
 
@@ -255,7 +271,9 @@ el archivo de requisitos.
 consulta SQS sin parar. Variables:
 
 | Variable | Valor por defecto | Uso |
-|---|---|---|
+| --- | --- | --- |
+| `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Con otro valor el worker no arranca |
+| `FACE_MIN_FACES` | `8` | Solo en el modo `faces`: rostros mínimos para conservar una identidad |
 | `AWS_SQS_QUEUE_URL` | (obligatoria) | Cola donde el backend publica los trabajos |
 | `AWS_SQS_RESULTS_QUEUE_URL` | (obligatoria) | Cola donde el worker publica el avance, los resultados y los fallos |
 | `AWS_REGION` | `us-east-2` | Región de SQS y S3 |
@@ -282,7 +300,8 @@ Flujo por mensaje `VIDEO_UPLOAD_READY` (lo publica `SqsVideoJobPublisher` del ba
 
 1. Publica `VIDEO_PROCESSING_STARTED` en la cola de resultados.
 2. Descarga `s3://<bucket>/<objectKey>` en `database/jobs/<jobId>/`.
-3. Corre `tracking.py` (venvs/track) y `face_recognition.py` (venvs/faces).
+3. En el modo `faces` corre `face_identities.py` (venvs/faces). En el modo `tracks` corre
+   `tracking.py` (venvs/track) y `face_recognition.py` (venvs/faces).
 4. Sube cada rostro a `s3://<bucket>/<FACES_S3_PREFIX>/<jobId>/<trackId>.jpg`.
 5. Publica `VIDEO_PROCESSING_COMPLETED` con los rostros y borra el mensaje de la cola de
    trabajos.
@@ -291,7 +310,7 @@ Eventos que publica el worker en la cola de resultados (los consume
 `SqsVideoResultListener` del backend):
 
 | `eventType` | Cuándo | Campos propios |
-|---|---|---|
+| --- | --- | --- |
 | `VIDEO_PROCESSING_STARTED` | Al tomar el trabajo y cada 120 s mientras corre | ninguno |
 | `VIDEO_PROCESSING_COMPLETED` | Al terminar | `appearances` |
 | `VIDEO_PROCESSING_FAILED` | Cuando el trabajo se descarta | `reason` |
@@ -315,7 +334,8 @@ Todos llevan `eventVersion`, `jobId` y `sentAt` (UTC, ISO-8601). Ejemplo:
 }
 ```
 
-- `faceId`: identidad por video, una por persona seguida.
+- `faceId`: identidad por video, una por identidad del modo `faces` o una por persona
+  seguida del modo `tracks`.
 - `timestamp`: posición del rostro elegido dentro del video.
 - `capturedAt`: ISO-8601 con offset, como exige `OffsetDateTime.parse`. Es el inicio de
   la grabación tomado del nombre del archivo del NVR (`Camera_chN_YYYYMMDDHHMMSS...`) más
@@ -350,10 +370,21 @@ Manejo de fallos:
 python3 worker.py --local /ruta/al/video.mp4 --job-id prueba
 ```
 
-Corre las dos etapas igual que en producción e imprime el payload. `frameUrl` es la ruta
+Corre el modo de `PIPELINE_MODE` igual que en producción e imprime el payload. `frameUrl` es la ruta
 local del rostro. Los archivos quedan en `database/jobs/prueba/`.
 
 ### Etapas a mano
+
+Modo `faces`:
+
+```bash
+venvs/faces/bin/python face_identities.py --video /ruta/al/video.mp4 --faces-dir database/faces_identidades
+```
+
+`--video` es obligatorio; sin `--faces-dir` se usa `database/faces_identidades`.
+`--annotated-video` es opcional.
+
+Modo `tracks`:
 
 ```bash
 venvs/track/bin/python tracking.py --video /ruta/al/video.mp4 --candidates-dir database/candidates
@@ -368,17 +399,114 @@ opciones se usan `database/candidates_cfc_reid` y `database/faces_cfc_reid`.
 Nunca se usa `source venv/bin/activate` + `python3`: lanzar cada script con el intérprete
 de su venv es lo que garantiza que corra sobre el stack correcto.
 
-### Las dos etapas con video anotado (`run.sh`)
+### El pipeline con video anotado (`run.sh`)
 
 ```bash
 ./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
+PIPELINE_MODE=tracks ./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
 ```
 
-Corre `tracking.py` y `face_recognition.py` con la configuración vigente, igual que el
+`run.sh` usa `PIPELINE_MODE` igual que el worker (`faces` por defecto) y se detiene con
+un error si tiene otro valor. La salida va a `database/run/<nombre del video>/` si no se
+indica otra carpeta.
+
+En el modo `faces` corre `face_identities.py` y escribe `faces/` e `identities.mp4`, el
+video de los fotogramas analizados con cada rostro conservado en una caja con su
+`ID <n>`. Cada ejecución borra antes `faces/` de esa carpeta.
+
+En el modo `tracks` corre `tracking.py` y `face_recognition.py` con la configuración vigente, igual que el
 worker, y además escribe `tracked.mp4` con las cajas y los IDs del tracker para
 revisarlos. La salida va a `database/run/<nombre del video>/` (`candidates/`, `faces/` y
 `tracked.mp4`) si no se indica otra carpeta. Cada ejecución borra antes `candidates/` y
 `faces/` de esa carpeta.
+
+---
+
+## Modo faces: identidad por rostro (`face_identities.py`)
+
+Corre en `venvs/faces`, en un solo proceso, y no usa el tracker del cuerpo. Busca todos
+los rostros del video y los agrupa en identidades con sus embeddings:
+
+1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`) y
+   analiza un fotograma cada `FACE_INTERVAL_S` segundos.
+2. Corre RetinaFace sobre el fotograma completo.
+3. Alinea cada rostro con sus cinco puntos a la plantilla de ArcFace de 112x112 px.
+4. Calcula el embedding con GhostFaceNet (DeepFace con `detector_backend="skip"` y
+   `align=False`, porque el rostro ya viene alineado) y lo normaliza a norma 1. Mide la
+   nitidez como varianza del laplaciano dentro de la caja del rostro.
+5. `identity_linking.py` agrupa los rostros en identidades (ver abajo).
+6. Elige el mejor rostro de cada identidad con el mismo orden de `face_recognition.py`
+   (área del rostro por la raíz cuadrada de la nitidez) y lo guarda con cabeza y hombros,
+   con los márgenes `OUTPUT_MARGIN_SIDE` / `TOP` / `BOTTOM` de `face_recognition.py`.
+
+Agrupación (`identity_linking.py`, solo numpy):
+
+1. Solo entran los rostros con confianza de al menos `MIN_SCORE`.
+2. Tracklets: un rostro se une al tracklet cuyo último rostro tiene IoU de al menos
+   `LINK_IOU` y similitud coseno de al menos `LINK_SIMILARITY` con él. La asignación es
+   voraz por IoU más similitud, de mayor a menor, con un rostro por tracklet y por
+   fotograma. Un tracklet puede saltarse hasta `MAX_SKIP` fotogramas analizados.
+3. Fusión: agrupamiento jerárquico con enlace promedio (ponderado por el tamaño de cada
+   tracklet) de los embeddings medios de los tracklets, hasta `MERGE_THRESHOLD`. Dos
+   grupos que comparten un fotograma analizado nunca se fusionan: una persona no aparece
+   dos veces en el mismo fotograma.
+4. Se descartan las identidades con menos de `MIN_FACES` rostros.
+5. Gemelo espejo: si dos identidades comparten un fotograma y sus embeddings medios
+   tienen similitud de al menos `TWIN_THRESHOLD`, se descarta la de menor calidad. La
+   calidad es la mediana de la nitidez por la mediana del tamaño del rostro (lado menor,
+   en px). Pasa con reflejos y con detecciones repetidas de la misma persona.
+6. Las identidades se ordenan por su primera aparición y se numeran desde 1.
+
+| Parámetro | Valor | Dónde |
+| --- | --- | --- |
+| `FACE_INTERVAL_S` | `0.1` (un fotograma analizado cada 0.1 s, paso `max(1, round(fps * 0.1))`) | `face_identities.py` |
+| `RETINA_THRESHOLD` | `0.9` | `face_identities.py` |
+| `RETINA_ALLOW_UPSCALING` | `True` | `face_identities.py` |
+| `EMBEDDING_MODEL` | `GhostFaceNet` | `face_identities.py` |
+| `MIN_SCORE` | `0.99` | `identity_linking.py` |
+| `LINK_IOU` | `0.3` | `identity_linking.py` |
+| `LINK_SIMILARITY` | `0.2` | `identity_linking.py` |
+| `MAX_SKIP` | `2` | `identity_linking.py` |
+| `MERGE_THRESHOLD` | `0.35` | `identity_linking.py` |
+| `TWIN_THRESHOLD` | `0.6` | `identity_linking.py` |
+| `MIN_FACES` | `8`, o el valor de la variable `FACE_MIN_FACES` | `identity_linking.py` |
+
+Son valores congelados: no se cambian sin repetir la validación. La excepción es
+`FACE_MIN_FACES`: en cámaras de baja resolución 5 encuentra algunas personas más.
+
+| Opción | Valor por defecto | Efecto |
+| --- | --- | --- |
+| `--video` | (obligatorio) | Video de entrada |
+| `--faces-dir` | `database/faces_identidades` | Carpeta de salida |
+| `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video `mp4v` de los fotogramas analizados, a `fps / paso` fps, con cada rostro conservado en una caja con su `ID <n>` |
+
+Salidas en `--faces-dir`:
+
+| Archivo | Contenido |
+| --- | --- |
+| `<id>/face_of_<id>.jpg` | Mejor rostro de la identidad, con cabeza y hombros |
+| `results.json` | El mismo formato de `face_recognition.py`, con el id de la identidad como `track_id`. `tracks_checked` es el número de identidades, `candidates_checked` el número de rostros de la identidad y `candidate` queda en `null` |
+| `identities.json` | `video`, `fps`, `step`, `analysed_frames` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score` y `px`. No guarda embeddings |
+
+Al terminar imprime cuántos fotogramas analizó, cuántos rostros detectó y cuántas
+identidades conservó.
+
+### Por qué
+
+El modo `tracks` da la identidad por el ID del tracker del cuerpo y después elige un
+rostro por track. En video con mucha gente y rostros más grandes (ChokePoint, 800x600)
+encuentra entre 9 y 11 de unas 24 personas, la mitad de los tracks mezclan a varias
+personas y el rostro de una persona puede quedar en el track de otra.
+
+El modo `faces` trabaja directamente con los rostros:
+
+| Video | Modo `tracks` | Modo `faces` |
+| --- | --- | --- |
+| ChokePoint P2E_S5, tres cámaras con unas 24 personas cada una | 9 a 11 personas | 24, 24 y 27 identidades (C1, C2 y C3), cada persona coherente en sus rostros |
+| Camera3 (CCTV etiquetado del proyecto, 14 personas) | 7 personas, 8 duplicados, 4 identidades mezcladas | 7 personas, 2 duplicados, 0 identidades mezcladas |
+
+Una de las tres cámaras de ChokePoint se dejó aparte y no se usó para ajustar los
+parámetros.
 
 ---
 
@@ -389,7 +517,7 @@ los fotogramas que se saltan sin decodificarlos y `cap.retrieve()` solo decodifi
 que se analizan. `persist=True` conserva el estado del tracker entre llamadas.
 
 | Parámetro | Valor | Efecto |
-|---|---|---|
+| --- | --- | --- |
 | `--video` | (obligatorio) | Video de entrada |
 | `CANDIDATES_DIR` / `--candidates-dir` | `database/candidates_cfc_reid` | Carpeta de salida |
 | `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video con las cajas y los IDs del tracker |
@@ -453,7 +581,7 @@ Para cada persona, la etapa 2 revisa **todos** sus recortes:
    acotado al recorte de la persona.
 
 | Parámetro | Valor | Efecto |
-|---|---|---|
+| --- | --- | --- |
 | `CANDIDATES_DIR` / `--candidates-dir` | `database/candidates_cfc_reid` | Recortes de la etapa 1 |
 | `FACES_DIR` / `--faces-dir` | `database/faces_cfc_reid` | Carpeta de salida |
 | `FACE_CONFIDENCE_THRESHOLD` | `0.92` | Confianza mínima de RetinaFace (escala de 0 a 1, **no** porcentaje) |
@@ -502,11 +630,13 @@ DET-05 y E2E-03).
   ffmpeg -i tracked.mp4 -vf "setpts=PTS/8" -r 8 -c:v libx264 -pix_fmt yuv420p \
     -movflags +faststart tracked_h264.mp4
   ```
-  `tracking.py` usa `mp4v` porque `avc1` suele fallar: las ruedas de OpenCV para Linux
+  Lo mismo vale para `identities.mp4` del modo `faces`. `tracking.py` y
+  `face_identities.py` usan `mp4v` porque `avc1` suele fallar: las ruedas de OpenCV para Linux
   vienen sin x264.
 - **`cv2.VideoWriter_fourcc` no existe en OpenCV 5.** Se usa `cv2.VideoWriter.fourcc(...)`.
-- **Memoria de GPU:** `face_recognition.py` define `TF_FORCE_GPU_ALLOW_GROWTH=true` para
-  que TensorFlow no tome toda la memoria de la T4. Esa línea se debe mantener.
+- **Memoria de GPU:** `face_recognition.py` y `face_identities.py` definen
+  `TF_FORCE_GPU_ALLOW_GROWTH=true` para que TensorFlow no tome toda la memoria de la T4.
+  Esa línea se debe mantener.
 - **Un segfault siempre significa** que un entorno se contaminó con el otro framework.
   No se depura: se reconstruye.
 
@@ -514,12 +644,13 @@ DET-05 y E2E-03).
 
 ## Reconocimiento entre videos (no incluido)
 
-`venvs/faces` tiene `deepface`, pero el pipeline no calcula embeddings. Se probó en
-`tesis-experiments`: con la resolución de las cámaras actuales no sirve para reconocer
-a la misma persona entre videos (decisión D001), y agrupar rostros dentro de un video
-perdía personas (decisión D002). Si se retoma con mejor video, el script corre en
-`venvs/faces`, lee los rostros de la etapa 2 y puede usar `detector_backend="skip"`,
-porque los rostros ya vienen recortados.
+El modo `faces` calcula embeddings, pero solo los compara dentro de un mismo video: la
+identidad sigue siendo por video. Se probó en `tesis-experiments`: con la resolución de
+las cámaras actuales los embeddings no sirven para reconocer a la misma persona entre
+videos (decisión D001). La decisión D002 (agrupar rostros dentro de un video perdía
+personas) es anterior al modo `faces`. Si se retoma el reconocimiento entre videos con
+mejor video, el script corre en `venvs/faces` y puede partir de los embeddings de
+GhostFaceNet que ya calcula `face_identities.py`.
 
 ---
 
