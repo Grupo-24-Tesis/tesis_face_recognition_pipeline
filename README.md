@@ -272,8 +272,9 @@ consulta SQS sin parar. Variables:
 
 | Variable | Valor por defecto | Uso |
 | --- | --- | --- |
-| `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Con otro valor el worker no arranca |
-| `FACE_MIN_FACES` | `8` | Solo en el modo `faces`: rostros mínimos para conservar una identidad |
+| `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
+| `FACE_MIN_FACES` | `8` | Solo en el modo `faces`: rostros mínimos para conservar una identidad. Entero positivo |
+| `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces`: segundos de video entre fotogramas analizados. Número positivo |
 | `AWS_SQS_QUEUE_URL` | (obligatoria) | Cola donde el backend publica los trabajos |
 | `AWS_SQS_RESULTS_QUEUE_URL` | (obligatoria) | Cola donde el worker publica el avance, los resultados y los fallos |
 | `AWS_REGION` | `us-east-2` | Región de SQS y S3 |
@@ -459,7 +460,7 @@ Agrupación (`identity_linking.py`, solo numpy):
 
 | Parámetro | Valor | Dónde |
 | --- | --- | --- |
-| `FACE_INTERVAL_S` | `0.1` (un fotograma analizado cada 0.1 s, paso `max(1, round(fps * 0.1))`) | `face_identities.py` |
+| `FACE_INTERVAL_S` | `0.1` (un fotograma analizado cada 0.1 s, paso `max(1, round(fps * FACE_INTERVAL_S))`), o el valor de la variable `FACE_INTERVAL_S` | `face_identities.py` |
 | `RETINA_THRESHOLD` | `0.9` | `face_identities.py` |
 | `RETINA_ALLOW_UPSCALING` | `True` | `face_identities.py` |
 | `EMBEDDING_MODEL` | `GhostFaceNet` | `face_identities.py` |
@@ -471,8 +472,29 @@ Agrupación (`identity_linking.py`, solo numpy):
 | `TWIN_THRESHOLD` | `0.6` | `identity_linking.py` |
 | `MIN_FACES` | `8`, o el valor de la variable `FACE_MIN_FACES` | `identity_linking.py` |
 
-Son valores congelados: no se cambian sin repetir la validación. La excepción es
-`FACE_MIN_FACES`: en cámaras de baja resolución 5 encuentra algunas personas más.
+Son valores congelados: no se cambian sin repetir la validación. Hay dos excepciones,
+que se eligen con variables de entorno. Las lee `face_identities.py`, y `run.sh` y el
+worker se las pasan tal cual. Vacías usan el valor por defecto; con un valor no válido
+el script se detiene con un mensaje:
+
+| Variable | Valor por defecto | Valores válidos | Para qué |
+| --- | --- | --- | --- |
+| `FACE_MIN_FACES` | `8` | Entero positivo | En cámaras de baja resolución 5 encuentra algunas personas más |
+| `FACE_INTERVAL_S` | `0.1` | Número positivo, en segundos | Acelerar videos largos analizando menos fotogramas |
+
+Tiempo de proceso: con 0.1 s el modo `faces` tarda unos 4 minutos de GPU para 27 s de
+video de 800x600 con mucha gente (ChokePoint P2E_S5_C1), unas 9 veces más que la
+duración del video. El worker corta cada etapa tras `STAGE_TIMEOUT` (7200 s por
+defecto), así que una grabación de más de unos 13 minutos con ese ritmo no termina.
+`FACE_INTERVAL_S` es la palanca para las grabaciones largas: con 0.2 s se analiza la
+mitad de los fotogramas. Los parámetros de la agrupación se validaron con 0.1 s y con
+otro intervalo hay que revisar el resultado: cada persona deja menos rostros y
+`FACE_MIN_FACES` descarta más identidades, y un tracklet se corta tras `MAX_SKIP`
+fotogramas analizados, que pasan a ser más segundos. En P2E_S5_C1 (24 identidades con
+0.1 s), con 0.2 s siguen saliendo 24 identidades. Con 0.5 s y `FACE_MIN_FACES` 8 quedan
+solo 4; con 5 quedan 17 y con 3 salen 26, ya con algún duplicado posible. En este video
+0.2 s no cambia el resultado; con intervalos mayores hay que bajar también
+`FACE_MIN_FACES` y revisar el resultado.
 
 | Opción | Valor por defecto | Efecto |
 | --- | --- | --- |
