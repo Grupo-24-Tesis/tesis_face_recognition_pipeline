@@ -17,10 +17,10 @@ from retinaface import RetinaFace
 
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
-from identity_linking import link_identities
+from identity_linking import env_positive_float, link_identities
 
 FACES_DIR = os.path.join("database", "faces_identidades")
-FACE_INTERVAL_S = 0.1
+FACE_INTERVAL_S = env_positive_float("FACE_INTERVAL_S", 0.1)
 RETINA_THRESHOLD = 0.9
 RETINA_ALLOW_UPSCALING = True
 EMBEDDING_MODEL = "GhostFaceNet"
@@ -110,7 +110,7 @@ def render_outputs(video_path, step, fps, identities, faces_dir, annotated_path)
             labels.setdefault(face["frame"], []).append((identity_id, face["box"]))
 
     if not best and not annotated_path:
-        return {}
+        return {}, False
 
     saved = {}
     last_needed = max(best) if best else -1
@@ -127,7 +127,11 @@ def render_outputs(video_path, step, fps, identities, faces_dir, annotated_path)
                 os.makedirs(output_dir, exist_ok=True)
                 face_name = f"face_of_{identity_id}.jpg"
                 cv2.imwrite(os.path.join(output_dir, face_name), crop)
-                saved[identity_id] = (winner, os.path.join(str(identity_id), face_name), crop.shape[:2])
+                h, w = frame.shape[:2]
+                x1, y1, x2, y2 = winner["box"]
+                saved[identity_id] = (winner, os.path.join(str(identity_id), face_name),
+                                      crop.shape[:2],
+                                      [max(0, x1), max(0, y1), min(w, x2), min(h, y2)])
 
             if annotated_path:
                 if writer is None:
@@ -147,12 +151,12 @@ def render_outputs(video_path, step, fps, identities, faces_dir, annotated_path)
         cap.release()
         if writer is not None:
             writer.release()
-    return saved
+    return saved, writer is not None
 
 
 def face_result(identity_id, faces, saved, fps):
-    winner, face_file, (fh, fw) = saved
-    x1, y1, x2, y2 = winner["box"]
+    winner, face_file, (fh, fw), face_box = saved
+    x1, y1, x2, y2 = face_box
     print(f"[{identity_id}] mejor rostro en el fotograma {winner['frame']} | "
           f"score {winner['score']:.4f} | rostro {fw}x{fh} | nitidez {winner['sharpness']:.1f} "
           f"({len(faces)} rostros de la identidad)")
@@ -205,7 +209,7 @@ def main():
 
     identities = link_identities(detections, step)
     os.makedirs(args.faces_dir, exist_ok=True)
-    saved = render_outputs(args.video, step, fps, identities, args.faces_dir,
+    saved, annotated = render_outputs(args.video, step, fps, identities, args.faces_dir,
                            args.annotated_video)
 
     results = []
@@ -228,7 +232,7 @@ def main():
     print(f"\nSe analizaron {analysed} fotogramas (uno cada {step}), se detectaron "
           f"{len(detections)} rostros y se conservaron {len(identities)} identidades; "
           f"se guardó el mejor rostro de {len(results)} en {args.faces_dir}")
-    if args.annotated_video:
+    if annotated:
         print(f"Video anotado escrito en {args.annotated_video}")
 
 

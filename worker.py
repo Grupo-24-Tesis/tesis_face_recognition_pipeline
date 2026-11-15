@@ -24,7 +24,7 @@ FACES_S3_PREFIX = os.environ.get("FACES_S3_PREFIX", "faces").strip("/")
 FACES_URL_BASE = os.environ.get("FACES_URL_BASE", "").rstrip("/")
 CAMERA_TZ = ZoneInfo(os.environ.get("CAMERA_TZ", "America/Bogota"))
 KEEP_JOB_FILES = os.environ.get("KEEP_JOB_FILES", "0") == "1"
-PIPELINE_MODE = os.environ.get("PIPELINE_MODE", "faces")
+PIPELINE_MODE = os.environ.get("PIPELINE_MODE") or "faces"
 PIPELINE_MODES = ("faces", "tracks")
 
 EVENT_TYPE = "VIDEO_UPLOAD_READY"
@@ -398,7 +398,10 @@ def run_local(video_path, job_id):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Worker de la cola: procesa los videos del backend con el pipeline de dos etapas")
+    parser = argparse.ArgumentParser(description="Worker de la cola: procesa los videos del backend con la "
+                                     "identidad por rostro (PIPELINE_MODE=faces, por defecto) "
+                                     "o con el seguimiento de personas en dos etapas "
+                                     "(PIPELINE_MODE=tracks)")
     parser.add_argument("--local", metavar="VIDEO",
                         help="procesa un video local e imprime el payload de resultados")
     parser.add_argument("--job-id", default="local-test",

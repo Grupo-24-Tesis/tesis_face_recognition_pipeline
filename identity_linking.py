@@ -1,6 +1,34 @@
+import math
 import os
 
 import numpy as np
+
+
+def env_positive_int(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise SystemExit(f"{name} debe ser un entero positivo, no {value!r}")
+    return number
+
+
+def env_positive_float(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        number = 0.0
+    if not math.isfinite(number) or number <= 0:
+        raise SystemExit(f"{name} debe ser un número positivo, no {value!r}")
+    return number
+
 
 MIN_SCORE = 0.99
 LINK_IOU = 0.3
@@ -8,7 +36,7 @@ LINK_SIMILARITY = 0.2
 MAX_SKIP = 2
 MERGE_THRESHOLD = 0.35
 TWIN_THRESHOLD = 0.6
-MIN_FACES = int(os.environ.get("FACE_MIN_FACES", "8"))
+MIN_FACES = env_positive_int("FACE_MIN_FACES", 8)
 
 
 def iou(a, b):
