@@ -24,6 +24,8 @@ FACES_S3_PREFIX = os.environ.get("FACES_S3_PREFIX", "faces").strip("/")
 FACES_URL_BASE = os.environ.get("FACES_URL_BASE", "").rstrip("/")
 CAMERA_TZ = ZoneInfo(os.environ.get("CAMERA_TZ", "America/Bogota"))
 KEEP_JOB_FILES = os.environ.get("KEEP_JOB_FILES", "0") == "1"
+PIPELINE_MODE = os.environ.get("PIPELINE_MODE", "faces")
+PIPELINE_MODES = ("faces", "tracks")
 
 EVENT_TYPE = "VIDEO_UPLOAD_READY"
 EVENT_STARTED = "VIDEO_PROCESSING_STARTED"
@@ -93,13 +95,23 @@ def run_stage(python, script, *args):
         raise StageError(f"{script} superó el límite de {STAGE_TIMEOUT} s") from exc
 
 
+def check_pipeline_mode():
+    if PIPELINE_MODE not in PIPELINE_MODES:
+        raise SystemExit(f"PIPELINE_MODE desconocido {PIPELINE_MODE!r}: "
+                         f"use {' o '.join(PIPELINE_MODES)}")
+
+
 def run_pipeline(video_path, job_dir):
-    candidates_dir = os.path.join(job_dir, "candidates")
     faces_dir = os.path.join(job_dir, "faces")
-    run_stage(TRACK_PYTHON, "tracking.py",
-              "--video", video_path, "--candidates-dir", candidates_dir)
-    run_stage(FACES_PYTHON, "face_recognition.py",
-              "--candidates-dir", candidates_dir, "--faces-dir", faces_dir)
+    if PIPELINE_MODE == "faces":
+        run_stage(FACES_PYTHON, "face_identities.py",
+                  "--video", video_path, "--faces-dir", faces_dir)
+    else:
+        candidates_dir = os.path.join(job_dir, "candidates")
+        run_stage(TRACK_PYTHON, "tracking.py",
+                  "--video", video_path, "--candidates-dir", candidates_dir)
+        run_stage(FACES_PYTHON, "face_recognition.py",
+                  "--candidates-dir", candidates_dir, "--faces-dir", faces_dir)
     with open(os.path.join(faces_dir, "results.json")) as f:
         return faces_dir, json.load(f)["faces"]
 
@@ -343,6 +355,7 @@ def handle_message(sqs, s3, message):
 
 
 def poll_forever():
+    check_pipeline_mode()
     import boto3
 
     if not QUEUE_URL:
@@ -372,6 +385,7 @@ def poll_forever():
 
 
 def run_local(video_path, job_id):
+    check_pipeline_mode()
     job_dir = os.path.join(JOBS_DIR, job_id)
     shutil.rmtree(job_dir, ignore_errors=True)
     os.makedirs(job_dir)
