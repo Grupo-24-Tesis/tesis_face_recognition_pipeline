@@ -30,6 +30,15 @@ def env_positive_float(name, default):
     return number
 
 
+def env_flag(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    if value not in ("0", "1"):
+        raise SystemExit(f"{name} debe ser 0 o 1, no {value!r}")
+    return value == "1"
+
+
 MIN_SCORE = 0.99
 LINK_IOU = 0.3
 LINK_SIMILARITY = 0.2

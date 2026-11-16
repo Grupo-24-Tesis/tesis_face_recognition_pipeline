@@ -17,13 +17,15 @@ from retinaface import RetinaFace
 
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
-from identity_linking import env_positive_float, link_identities
+from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
+from identity_linking import env_flag, env_positive_float, link_identities
 
 FACES_DIR = os.path.join("database", "faces_identidades")
 FACE_INTERVAL_S = env_positive_float("FACE_INTERVAL_S", 0.1)
 RETINA_THRESHOLD = 0.9
 RETINA_ALLOW_UPSCALING = True
 EMBEDDING_MODEL = "GhostFaceNet"
+EMBED_BATCH = env_flag("FACE_EMBED_BATCH", True)
 ALIGNED_SIZE = 112
 ARCFACE_TEMPLATE = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366],
                              [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float32)
@@ -65,8 +67,20 @@ def aligned_face(frame, landmarks):
 def embedding(aligned):
     rep = DeepFace.represent(aligned, model_name=EMBEDDING_MODEL,
                              detector_backend="skip", align=False)
-    emb = np.array(rep[0]["embedding"], dtype=np.float32)
-    return emb / (np.linalg.norm(emb) + 1e-9)
+    return unit_embedding(rep[0]["embedding"])
+
+
+def add_embeddings(faces):
+    if not faces:
+        return
+    aligned_faces = [face.pop("aligned") for face in faces]
+    if EMBED_BATCH:
+        model = DeepFace.build_model(EMBEDDING_MODEL, task="facial_recognition")
+        values = embed_faces(model.forward, aligned_faces, model.input_shape)
+    else:
+        values = [embedding(aligned) for aligned in aligned_faces]
+    for face, emb in zip(faces, values):
+        face["embedding"] = emb
 
 
 def detect_faces(frame_idx, frame):
@@ -89,7 +103,7 @@ def detect_faces(frame_idx, frame):
             "score": float(face["score"]),
             "px": min(x2 - x1, y2 - y1),
             "sharpness": sharpness(box_crop),
-            "embedding": embedding(aligned),
+            "aligned": aligned,
         })
     return faces
 
@@ -198,12 +212,18 @@ def main():
     cap = open_video(args.video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(fps * FACE_INTERVAL_S))
-    detections = []
+    detections, pending = [], []
     analysed = 0
     try:
         for frame_idx, frame in analysed_frames(cap, step):
             analysed += 1
-            detections.extend(detect_faces(frame_idx, frame))
+            faces = detect_faces(frame_idx, frame)
+            detections.extend(faces)
+            pending.extend(faces)
+            if not EMBED_BATCH or len(pending) >= EMBED_CHUNK:
+                add_embeddings(pending)
+                pending = []
+        add_embeddings(pending)
     finally:
         cap.release()
 
