@@ -23,7 +23,7 @@ from identity_linking import env_flag, env_positive_float, link_identities
 FACES_DIR = os.path.join("database", "faces_identidades")
 FACE_INTERVAL_S = env_positive_float("FACE_INTERVAL_S", 0.1)
 RETINA_THRESHOLD = 0.9
-RETINA_ALLOW_UPSCALING = True
+RETINA_ALLOW_UPSCALING = env_flag("FACE_DETECT_UPSCALE", True)
 EMBEDDING_MODEL = "GhostFaceNet"
 EMBED_BATCH = env_flag("FACE_EMBED_BATCH", True)
 ALIGNED_SIZE = 112
