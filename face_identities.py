@@ -282,8 +282,8 @@ def main():
                            for k, faces in enumerate(identities, start=1)],
         }, f, indent=2)
 
-    print(f"\nSe analizaron {len(sampled)} fotogramas ({sampling_summary(frames_per_mode, steps)}), "
-          f"se detectaron {len(detections)} rostros y se conservaron {len(identities)} "
+    print(f"\nSe analizaron {len(sampled)} fotogramas "
+          f"({sampling_summary(frames_per_mode, steps)}), se detectaron {len(detections)} rostros y se conservaron {len(identities)} "
           f"identidades; se guardó el mejor rostro de {len(results)} en {args.faces_dir}")
     duration = f" para {total_frames / fps:.1f} s de video" if total_frames > 0 else ""
     print(f"Tiempo total: {wall_time_s:.1f} s{duration}")
