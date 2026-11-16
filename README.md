@@ -470,8 +470,11 @@ Agrupación (`identity_linking.py`, solo numpy):
    dos veces en el mismo fotograma.
 4. Presencia mínima. Con `FACE_ADAPTIVE=0` se descartan las identidades con menos de
    `MIN_FACES` rostros, como antes. Con `FACE_ADAPTIVE=1` cada rostro vale el intervalo
-   (en segundos de video) con que se analizó su fotograma, y se conserva la identidad si
-   la suma llega a `MIN_PRESENCE_S` y tiene al menos `MIN_FACES_ABS` rostros. 0.8 s
+   (en segundos de video) que el muestreo elige después de su fotograma, es decir, el
+   tiempo hasta el siguiente fotograma analizado. Tras un fotograma con rostros ese
+   intervalo es denso o disperso, nunca inactivo, así que un rostro que llega tras un rato
+   sin gente no cuenta el segundo vacío anterior. Se conserva la identidad si la suma
+   llega a `MIN_PRESENCE_S` y tiene al menos `MIN_FACES_ABS` rostros. 0.8 s
    equivale a los 8 rostros de antes a 0.1 s.
 5. Gemelo espejo: si dos identidades comparten un fotograma y sus embeddings medios
    tienen similitud de al menos `TWIN_THRESHOLD`, se descarta la de menor calidad. La
@@ -577,13 +580,13 @@ El worker corta cada etapa tras `STAGE_TIMEOUT` (7200 s por defecto).
 
 Con `FACE_ADAPTIVE=0`, `FACE_INTERVAL_S` sigue siendo la palanca para las grabaciones
 largas: con 0.2 s se analiza la mitad de los fotogramas. Los parámetros de la agrupación
-se validaron con 0.1 s y con otro intervalo hay que revisar el resultado: cada persona deja menos rostros y
-`FACE_MIN_FACES` descarta más identidades, y un tracklet se corta tras `MAX_SKIP`
-fotogramas analizados, que pasan a ser más segundos. En P2E_S5_C1 (24 identidades con
-0.1 s), con 0.2 s siguen saliendo 24 identidades. Con 0.5 s y `FACE_MIN_FACES` 8 quedan
-solo 4; con 5 quedan 17 y con 3 salen 26, ya con algún duplicado posible. En este video
-0.2 s no cambia el resultado; con intervalos mayores hay que bajar también
-`FACE_MIN_FACES` y revisar el resultado.
+se validaron con 0.1 s y con otro intervalo hay que revisar el resultado: cada persona
+deja menos rostros y `FACE_MIN_FACES` descarta más identidades, y un tracklet se corta
+tras `MAX_SKIP` fotogramas analizados, que pasan a ser más segundos. En P2E_S5_C1 (24
+identidades con 0.1 s), con 0.2 s siguen saliendo 24 identidades. Con 0.5 s y
+`FACE_MIN_FACES` 8 quedan solo 4; con 5 quedan 17 y con 3 salen 26, ya con algún
+duplicado posible. En este video 0.2 s no cambia el resultado; con intervalos mayores hay
+que bajar también `FACE_MIN_FACES` y revisar el resultado.
 
 ### Opciones y salidas
 
@@ -591,7 +594,7 @@ solo 4; con 5 quedan 17 y con 3 salen 26, ya con algún duplicado posible. En es
 | --- | --- | --- |
 | `--video` | (obligatorio) | Video de entrada |
 | `--faces-dir` | `database/faces_identidades` | Carpeta de salida |
-| `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video `mp4v` de los fotogramas analizados, a `fps / paso` fps (con el paso denso en el muestreo adaptativo, repitiendo cada fotograma hasta el siguiente analizado), con cada rostro conservado en una caja con su `ID <n>` |
+| `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video `mp4v` de los fotogramas analizados, a `fps / paso` fps (con el paso denso en el muestreo adaptativo, repitiendo cada fotograma hasta el siguiente analizado; las repeticiones se calculan sobre el tiempo acumulado para que el video no se desfase), con cada rostro conservado en una caja con su `ID <n>` |
 
 Salidas en `--faces-dir`:
 
@@ -599,7 +602,7 @@ Salidas en `--faces-dir`:
 | --- | --- |
 | `<id>/face_of_<id>.jpg` | Mejor rostro de la identidad, con cabeza y hombros |
 | `results.json` | El mismo formato de `face_recognition.py`, con el id de la identidad como `track_id`. `tracks_checked` es el número de identidades, `candidates_checked` el número de rostros de la identidad y `candidate` queda en `null` |
-| `identities.json` | `video`, `fps`, `step` (el paso fijo, `null` con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo con que se analizó su fotograma). No guarda embeddings |
+| `identities.json` | `video`, `fps`, `step` (el paso fijo, o el paso denso con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo que se eligió después de su fotograma y que el rostro aporta a la presencia). No guarda embeddings |
 
 Al terminar imprime cuántos fotogramas analizó (por modo, con el muestreo adaptativo),
 cuántos rostros detectó, cuántas identidades conservó y el tiempo total del proceso.
