@@ -1,3 +1,5 @@
+import math
+
 from identity_linking import LINK_IOU, env_flag, env_positive_float, env_positive_int, iou
 
 FIXED = "fixed"
@@ -59,3 +61,46 @@ def advance(state, boxes, frame_idx, hold):
         mode = state["mode"]
     return {"mode": mode, "boxes": [list(box) for box in boxes], "empty": empty,
             "hold_until": hold_until}
+
+
+def read_frames(cap, first, next_target):
+    frame_idx, target = -1, first
+    while target is not None:
+        if not cap.grab():
+            return
+        frame_idx += 1
+        if frame_idx < target:
+            continue
+        ok, frame = cap.retrieve()
+        if not ok:
+            return
+        yield frame_idx, frame
+        target = next_target(frame_idx)
+
+
+def sample_video(cap, fps, adaptive, detect):
+    steps = sampling_steps(fps, adaptive)
+    hold = hold_frames(fps)
+    state = start_state(adaptive)
+    sample = 0
+    for frame_idx, frame in read_frames(cap, 0, lambda idx: idx + steps[state["mode"]]):
+        mode = state["mode"]
+        faces = detect(frame_idx, frame, sample)
+        state = advance(state, [face["box"] for face in faces], frame_idx, hold)
+        for face in faces:
+            face["interval_s"] = steps[state["mode"]] / fps
+        sample += 1
+        yield frame_idx, mode, faces
+
+
+def base_step(steps):
+    return steps.get(FIXED, steps.get(DENSE))
+
+
+def frame_repeats(sampled, step):
+    def written(frame_idx):
+        return math.floor((frame_idx - sampled[0]) / step + 0.5)
+    repeats = {a: written(b) - written(a) for a, b in zip(sampled, sampled[1:])}
+    if sampled:
+        repeats[sampled[-1]] = 1
+    return repeats

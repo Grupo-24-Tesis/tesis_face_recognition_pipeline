@@ -20,8 +20,8 @@ from retinaface import RetinaFace
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
 from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
-from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, advance, hold_frames, sampling_steps,
-                           start_state)
+from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, base_step, frame_repeats, read_frames,
+                           sample_video, sampling_steps)
 from identity_linking import env_flag, link_identities
 
 FACES_DIR = os.path.join("database", "faces_identidades")
@@ -41,21 +41,6 @@ def open_video(video_path):
     if not cap.isOpened():
         raise RuntimeError(f"No se pudo abrir el video: {video_path}")
     return cap
-
-
-def read_frames(cap, first, next_target):
-    frame_idx, target = -1, first
-    while target is not None:
-        if not cap.grab():
-            return
-        frame_idx += 1
-        if frame_idx < target:
-            continue
-        ok, frame = cap.retrieve()
-        if not ok:
-            return
-        yield frame_idx, frame
-        target = next_target(frame_idx)
 
 
 def aligned_face(frame, landmarks):
@@ -87,7 +72,7 @@ def add_embeddings(faces):
         face["embedding"] = emb
 
 
-def detect_faces(frame_idx, frame, sample, interval_s):
+def detect_faces(frame_idx, frame, sample):
     resp = RetinaFace.detect_faces(frame, threshold=RETINA_THRESHOLD,
                                    allow_upscaling=RETINA_ALLOW_UPSCALING)
     if not isinstance(resp, dict):
@@ -104,7 +89,6 @@ def detect_faces(frame_idx, frame, sample, interval_s):
         faces.append({
             "frame": frame_idx,
             "sample": sample,
-            "interval_s": interval_s,
             "box": [x1, y1, x2, y2],
             "score": float(face["score"]),
             "px": min(x2 - x1, y2 - y1),
@@ -121,25 +105,19 @@ def ranking(face):
 
 
 def analyse_video(cap, fps):
-    steps = sampling_steps(fps, ADAPTIVE)
-    hold = hold_frames(fps)
-    state = start_state(ADAPTIVE)
     detections, pending, sampled = [], [], []
-    for frame_idx, frame in read_frames(cap, 0, lambda idx: idx + steps[state["mode"]]):
-        mode = state["mode"]
-        faces = detect_faces(frame_idx, frame, len(sampled), steps[mode] / fps)
+    for frame_idx, mode, faces in sample_video(cap, fps, ADAPTIVE, detect_faces):
         sampled.append((frame_idx, mode))
         detections.extend(faces)
         pending.extend(faces)
         if not EMBED_BATCH or len(pending) >= EMBED_CHUNK:
             add_embeddings(pending)
             pending = []
-        state = advance(state, [face["box"] for face in faces], frame_idx, hold)
     add_embeddings(pending)
-    return detections, sampled, steps
+    return detections, sampled, sampling_steps(fps, ADAPTIVE)
 
 
-def render_outputs(video_path, sampled, base_step, fps, identities, faces_dir, annotated_path):
+def render_outputs(video_path, sampled, video_step, fps, identities, faces_dir, annotated_path):
     best = {}
     labels = {}
     for identity_id, faces in enumerate(identities, start=1):
@@ -153,7 +131,7 @@ def render_outputs(video_path, sampled, base_step, fps, identities, faces_dir, a
 
     saved = {}
     last_needed = max(best) if best else -1
-    repeats = {a: max(1, round((b - a) / base_step)) for a, b in zip(sampled, sampled[1:])}
+    repeats = frame_repeats(sampled, video_step)
     targets = iter(sampled[1:])
     writer = None
     cap = open_video(video_path)
@@ -179,14 +157,14 @@ def render_outputs(video_path, sampled, base_step, fps, identities, faces_dir, a
                 if writer is None:
                     h, w = frame.shape[:2]
                     writer = cv2.VideoWriter(annotated_path, cv2.VideoWriter.fourcc(*"mp4v"),
-                                             fps / base_step, (w, h))
+                                             fps / video_step, (w, h))
                     if not writer.isOpened():
                         raise RuntimeError(f"No se pudo abrir el escritor de video para {annotated_path}")
                 for identity_id, (x1, y1, x2, y2) in labels.get(frame_idx, []):
                     cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
                     cv2.putText(frame, f"ID {identity_id}", (x1, max(12, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, BOX_COLOR, 1, cv2.LINE_AA)
-                for _ in range(repeats.get(frame_idx, 1)):
+                for _ in range(repeats[frame_idx]):
                     writer.write(frame)
             elif frame_idx >= last_needed:
                 break
@@ -256,7 +234,7 @@ def main():
     identities = link_identities(detections, by_time=ADAPTIVE)
     os.makedirs(args.faces_dir, exist_ok=True)
     saved, annotated = render_outputs(args.video, [idx for idx, _ in sampled],
-                                      min(steps.values()), fps, identities, args.faces_dir,
+                                      base_step(steps), fps, identities, args.faces_dir,
                                       args.annotated_video)
 
     results = []
@@ -272,7 +250,7 @@ def main():
         json.dump({
             "video": os.path.basename(args.video),
             "fps": fps,
-            "step": steps.get(FIXED),
+            "step": base_step(steps),
             "adaptive": ADAPTIVE,
             "steps": steps,
             "analysed_frames": len(sampled),
@@ -283,8 +261,9 @@ def main():
         }, f, indent=2)
 
     print(f"\nSe analizaron {len(sampled)} fotogramas "
-          f"({sampling_summary(frames_per_mode, steps)}), se detectaron {len(detections)} rostros y se conservaron {len(identities)} "
-          f"identidades; se guardó el mejor rostro de {len(results)} en {args.faces_dir}")
+          f"({sampling_summary(frames_per_mode, steps)}), se detectaron {len(detections)} "
+          f"rostros y se conservaron {len(identities)} identidades; se guardó el mejor "
+          f"rostro de {len(results)} en {args.faces_dir}")
     duration = f" para {total_frames / fps:.1f} s de video" if total_frames > 0 else ""
     print(f"Tiempo total: {wall_time_s:.1f} s{duration}")
     if annotated:
