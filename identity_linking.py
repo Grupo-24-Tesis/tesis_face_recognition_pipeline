@@ -46,6 +46,9 @@ MAX_SKIP = 2
 MERGE_THRESHOLD = 0.35
 TWIN_THRESHOLD = 0.6
 MIN_FACES = env_positive_int("FACE_MIN_FACES", 8)
+MIN_PRESENCE_S = env_positive_float("FACE_MIN_PRESENCE_S", 0.8)
+MIN_FACES_ABS = env_positive_int("FACE_MIN_FACES_ABS", 3)
+PRESENCE_TOLERANCE_S = 1e-6
 
 
 def iou(a, b):
@@ -60,7 +63,7 @@ def unit(v):
     return v / (np.linalg.norm(v) + 1e-9)
 
 
-def build_tracklets(detections, step):
+def build_tracklets(detections):
     by_frame = {}
     for d in detections:
         if d["score"] >= MIN_SCORE:
@@ -68,7 +71,8 @@ def build_tracklets(detections, step):
     tracklets, open_tracklets = [], []
     for frame in sorted(by_frame):
         current = by_frame[frame]
-        live = [t for t in open_tracklets if frame - t[-1]["frame"] <= step * (1 + MAX_SKIP)]
+        sample = current[0]["sample"]
+        live = [t for t in open_tracklets if sample - t[-1]["sample"] <= 1 + MAX_SKIP]
         pairs = []
         for ti, t in enumerate(live):
             for fi, f in enumerate(current):
@@ -154,9 +158,20 @@ def drop_mirror_twins(groups):
     return [g for k, g in enumerate(groups) if k not in drop]
 
 
-def link_identities(detections, step):
-    groups = merge_tracklets(build_tracklets(detections, step))
-    kept = [g for g in groups if len(g["faces"]) >= MIN_FACES]
+def presence_s(faces):
+    return math.fsum(f["interval_s"] for f in faces)
+
+
+def present_enough(faces, by_time):
+    if not by_time:
+        return len(faces) >= MIN_FACES
+    return (len(faces) >= MIN_FACES_ABS
+            and presence_s(faces) >= MIN_PRESENCE_S - PRESENCE_TOLERANCE_S)
+
+
+def link_identities(detections, by_time=False):
+    groups = merge_tracklets(build_tracklets(detections))
+    kept = [g for g in groups if present_enough(g["faces"], by_time)]
     kept = drop_mirror_twins(kept)
     kept.sort(key=lambda g: min(f["frame"] for f in g["faces"]))
     return [sorted(g["faces"], key=lambda f: f["frame"]) for g in kept]
