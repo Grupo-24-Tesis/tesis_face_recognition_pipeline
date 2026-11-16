@@ -5,7 +5,7 @@ cada una. Hay dos modos, que se eligen con la variable `PIPELINE_MODE`:
 
 | Modo | Identidad | Scripts | Venvs |
 | --- | --- | --- | --- |
-| `faces` (por defecto) | Por rostro: agrupa los rostros del video con embeddings de **GhostFaceNet** | `face_identities.py` e `identity_linking.py` | `venvs/faces` |
+| `faces` (por defecto) | Por rostro: agrupa los rostros del video con embeddings de **GhostFaceNet** | `face_identities.py`, `face_embedding.py`, `face_sampling.py` e `identity_linking.py` | `venvs/faces` |
 | `tracks` | Por track del cuerpo: **YOLO26m** + TrackTrack con ReID y un rostro por track | `tracking.py` y `face_recognition.py` | `venvs/track` y `venvs/faces` |
 
 `worker.py` conecta el pipeline con el backend: recibe los videos por una cola de SQS,
@@ -108,6 +108,8 @@ la carga de TensorFlow y de los pesos.
 | Archivo | Contenido |
 | --- | --- |
 | `face_identities.py` | Modo `faces`: detecta, alinea y agrupa los rostros del video y guarda el mejor de cada identidad |
+| `face_embedding.py` | Modo `faces`: preprocesamiento de GhostFaceNet y embeddings en bloque (numpy y OpenCV) |
+| `face_sampling.py` | Modo `faces`: elección del siguiente fotograma a analizar (muestreo adaptativo, sin dependencias externas) |
 | `identity_linking.py` | Modo `faces`: agrupación de rostros en identidades (solo numpy) |
 | `tracking.py` | Modo `tracks`, etapa 1: seguimiento de personas y recortes candidatos |
 | `face_recognition.py` | Modo `tracks`, etapa 2: mejor rostro por persona |
@@ -273,8 +275,10 @@ consulta SQS sin parar. Variables:
 | Variable | Valor por defecto | Uso |
 | --- | --- | --- |
 | `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
-| `FACE_MIN_FACES` | `8` | Solo en el modo `faces`: rostros mínimos para conservar una identidad. Entero positivo |
-| `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces`: segundos de video entre fotogramas analizados. Número positivo |
+| `FACE_ADAPTIVE` | `1` | Solo en el modo `faces`: `1` muestreo adaptativo, `0` intervalo fijo `FACE_INTERVAL_S` |
+| `FACE_MIN_FACES` | `8` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: rostros mínimos para conservar una identidad. Entero positivo |
+| `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: segundos de video entre fotogramas analizados. Número positivo |
+| Otras `FACE_*` | | Las demás variables del modo `faces` (`FACE_EMBED_BATCH`, `FACE_DETECT_UPSCALE`, los intervalos y umbrales del muestreo adaptativo y la presencia mínima): ver la sección del modo `faces` |
 | `AWS_SQS_QUEUE_URL` | (obligatoria) | Cola donde el backend publica los trabajos |
 | `AWS_SQS_RESULTS_QUEUE_URL` | (obligatoria) | Cola donde el worker publica el avance, los resultados y los fallos |
 | `AWS_REGION` | `us-east-2` | Región de SQS y S3 |
@@ -428,12 +432,23 @@ revisarlos. La salida va a `database/run/<nombre del video>/` (`candidates/`, `f
 Corre en `venvs/faces`, en un solo proceso, y no usa el tracker del cuerpo. Busca todos
 los rostros del video y los agrupa en identidades con sus embeddings:
 
-1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`) y
+1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`). Con
+   `FACE_ADAPTIVE=1` (por defecto) `face_sampling.py` elige tras cada fotograma analizado
+   cuánto avanzar hasta el siguiente (ver "Muestreo adaptativo"); con `FACE_ADAPTIVE=0`
    analiza un fotograma cada `FACE_INTERVAL_S` segundos.
-2. Corre RetinaFace sobre el fotograma completo.
+2. Corre RetinaFace sobre el fotograma completo, con escalado (`allow_upscaling`) si
+   `FACE_DETECT_UPSCALE=1`.
 3. Alinea cada rostro con sus cinco puntos a la plantilla de ArcFace de 112x112 px.
-4. Calcula el embedding con GhostFaceNet (DeepFace con `detector_backend="skip"` y
-   `align=False`, porque el rostro ya viene alineado) y lo normaliza a norma 1. Mide la
+4. Calcula el embedding con GhostFaceNet y lo normaliza a norma 1. Con
+   `FACE_EMBED_BATCH=1` (por defecto) `face_embedding.py` junta los rostros de varios
+   fotogramas en bloques de `EMBED_CHUNK` y hace una sola llamada al modelo por bloque; el
+   último bloque se rellena con ceros para que el modelo vea siempre el mismo tamaño y no
+   se recompile. El preprocesamiento es el mismo de `DeepFace.represent` con
+   `detector_backend="skip"` y `align=False` en la versión instalada (0.0.100): canales en
+   BGR, tamaño 112x112 (escala y relleno centrado si hiciera falta), `float32` y división
+   por 255 solo si el máximo pasa de 1. Con `FACE_EMBED_BATCH=0` se llama a
+   `DeepFace.represent` una vez por rostro, como antes. Sobre 199 rostros de P2E_S5_C1
+   las dos formas difieren como mucho en 5e-7 por componente, ya normalizadas. Mide la
    nitidez como varianza del laplaciano dentro de la caja del rostro.
 5. `identity_linking.py` agrupa los rostros en identidades (ver abajo).
 6. Elige el mejor rostro de cada identidad con el mismo orden de `face_recognition.py`
@@ -446,12 +461,18 @@ Agrupación (`identity_linking.py`, solo numpy):
 2. Tracklets: un rostro se une al tracklet cuyo último rostro tiene IoU de al menos
    `LINK_IOU` y similitud coseno de al menos `LINK_SIMILARITY` con él. La asignación es
    voraz por IoU más similitud, de mayor a menor, con un rostro por tracklet y por
-   fotograma. Un tracklet puede saltarse hasta `MAX_SKIP` fotogramas analizados.
+   fotograma. Un tracklet puede saltarse hasta `MAX_SKIP` fotogramas analizados; se
+   cuentan fotogramas analizados y no fotogramas del video, porque con el muestreo
+   adaptativo el paso cambia.
 3. Fusión: agrupamiento jerárquico con enlace promedio (ponderado por el tamaño de cada
    tracklet) de los embeddings medios de los tracklets, hasta `MERGE_THRESHOLD`. Dos
    grupos que comparten un fotograma analizado nunca se fusionan: una persona no aparece
    dos veces en el mismo fotograma.
-4. Se descartan las identidades con menos de `MIN_FACES` rostros.
+4. Presencia mínima. Con `FACE_ADAPTIVE=0` se descartan las identidades con menos de
+   `MIN_FACES` rostros, como antes. Con `FACE_ADAPTIVE=1` cada rostro vale el intervalo
+   (en segundos de video) con que se analizó su fotograma, y se conserva la identidad si
+   la suma llega a `MIN_PRESENCE_S` y tiene al menos `MIN_FACES_ABS` rostros. 0.8 s
+   equivale a los 8 rostros de antes a 0.1 s.
 5. Gemelo espejo: si dos identidades comparten un fotograma y sus embeddings medios
    tienen similitud de al menos `TWIN_THRESHOLD`, se descarta la de menor calidad. La
    calidad es la mediana de la nitidez por la mediana del tamaño del rostro (lado menor,
@@ -460,35 +481,103 @@ Agrupación (`identity_linking.py`, solo numpy):
 
 | Parámetro | Valor | Dónde |
 | --- | --- | --- |
-| `FACE_INTERVAL_S` | `0.1` (un fotograma analizado cada 0.1 s, paso `max(1, round(fps * FACE_INTERVAL_S))`), o el valor de la variable `FACE_INTERVAL_S` | `face_identities.py` |
+| `INTERVAL_S` | `0.1` (con `FACE_ADAPTIVE=0`, un fotograma analizado cada 0.1 s, paso `max(1, round(fps * FACE_INTERVAL_S))`), o el valor de la variable `FACE_INTERVAL_S` | `face_sampling.py` |
 | `RETINA_THRESHOLD` | `0.9` | `face_identities.py` |
-| `RETINA_ALLOW_UPSCALING` | `True` | `face_identities.py` |
+| `RETINA_ALLOW_UPSCALING` | `True`, o el valor de la variable `FACE_DETECT_UPSCALE` | `face_identities.py` |
 | `EMBEDDING_MODEL` | `GhostFaceNet` | `face_identities.py` |
+| `EMBED_CHUNK` | `64` rostros por llamada al modelo | `face_embedding.py` |
 | `MIN_SCORE` | `0.99` | `identity_linking.py` |
 | `LINK_IOU` | `0.3` | `identity_linking.py` |
 | `LINK_SIMILARITY` | `0.2` | `identity_linking.py` |
 | `MAX_SKIP` | `2` | `identity_linking.py` |
 | `MERGE_THRESHOLD` | `0.35` | `identity_linking.py` |
 | `TWIN_THRESHOLD` | `0.6` | `identity_linking.py` |
-| `MIN_FACES` | `8`, o el valor de la variable `FACE_MIN_FACES` | `identity_linking.py` |
+| `MIN_FACES` | `8`, o el valor de la variable `FACE_MIN_FACES` (solo con `FACE_ADAPTIVE=0`) | `identity_linking.py` |
+| `MIN_PRESENCE_S` | `0.8` s, o el valor de la variable `FACE_MIN_PRESENCE_S` (solo con `FACE_ADAPTIVE=1`) | `identity_linking.py` |
+| `MIN_FACES_ABS` | `3`, o el valor de la variable `FACE_MIN_FACES_ABS` (solo con `FACE_ADAPTIVE=1`) | `identity_linking.py` |
 
-Son valores congelados: no se cambian sin repetir la validación. Hay dos excepciones,
-que se eligen con variables de entorno. Las lee `face_identities.py`, y `run.sh` y el
-worker se las pasan tal cual. Vacías usan el valor por defecto; con un valor no válido
-el script se detiene con un mensaje:
+Son valores congelados: no se cambian sin repetir la validación. Las excepciones se
+eligen con variables de entorno. Las leen `face_identities.py`, `face_sampling.py` e
+`identity_linking.py`, y `run.sh` y el worker se las pasan tal cual. Vacías usan el valor
+por defecto; con un valor no válido el script se detiene con un mensaje:
 
 | Variable | Valor por defecto | Valores válidos | Para qué |
 | --- | --- | --- | --- |
-| `FACE_MIN_FACES` | `8` | Entero positivo | En cámaras de baja resolución 5 encuentra algunas personas más |
-| `FACE_INTERVAL_S` | `0.1` | Número positivo, en segundos | Acelerar videos largos analizando menos fotogramas |
+| `FACE_EMBED_BATCH` | `1` | `0` o `1` | `1` calcula los embeddings en bloques; `0` vuelve a una llamada de DeepFace por rostro |
+| `FACE_DETECT_UPSCALE` | `1` | `0` o `1` | `allow_upscaling` de RetinaFace. `0` es más rápido y puede perder rostros pequeños |
+| `FACE_ADAPTIVE` | `1` | `0` o `1` | `1` muestreo adaptativo; `0` intervalo fijo `FACE_INTERVAL_S` y regla `FACE_MIN_FACES`, como antes |
+| `FACE_INTERVAL_DENSE_S` | `0.1` | Número positivo, en segundos | Intervalo denso del muestreo adaptativo |
+| `FACE_INTERVAL_SPARSE_S` | `0.3` | Número positivo, en segundos | Intervalo disperso del muestreo adaptativo |
+| `FACE_INTERVAL_IDLE_S` | `1.0` | Número positivo, en segundos | Intervalo sin rostros del muestreo adaptativo |
+| `FACE_CROWD_FACES` | `3` | Entero positivo | Rostros en un fotograma a partir de los cuales se pasa a denso |
+| `FACE_IDLE_FRAMES` | `3` | Entero positivo | Fotogramas analizados seguidos sin rostros antes de pasar a inactivo |
+| `FACE_DENSE_HOLD_S` | `1.0` | Número positivo, en segundos | Tiempo de video mínimo en denso desde el último motivo para entrar |
+| `FACE_MIN_PRESENCE_S` | `0.8` | Número positivo, en segundos | Presencia mínima de una identidad con `FACE_ADAPTIVE=1` |
+| `FACE_MIN_FACES_ABS` | `3` | Entero positivo | Rostros mínimos de una identidad con `FACE_ADAPTIVE=1` |
+| `FACE_MIN_FACES` | `8` | Entero positivo | Con `FACE_ADAPTIVE=0`. En cámaras de baja resolución 5 encuentra algunas personas más |
+| `FACE_INTERVAL_S` | `0.1` | Número positivo, en segundos | Con `FACE_ADAPTIVE=0`. Acelerar videos largos analizando menos fotogramas |
 
-Tiempo de proceso: con 0.1 s el modo `faces` tarda unos 4 minutos de GPU para 27 s de
-video de 800x600 con mucha gente (ChokePoint P2E_S5_C1), unas 9 veces más que la
-duración del video. El worker corta cada etapa tras `STAGE_TIMEOUT` (7200 s por
-defecto), así que una grabación de más de unos 13 minutos con ese ritmo no termina.
-`FACE_INTERVAL_S` es la palanca para las grabaciones largas: con 0.2 s se analiza la
-mitad de los fotogramas. Los parámetros de la agrupación se validaron con 0.1 s y con
-otro intervalo hay que revisar el resultado: cada persona deja menos rostros y
+### Muestreo adaptativo
+
+Tras cada fotograma analizado, `face_sampling.py` elige el modo según lo que encontró, y
+el modo da el intervalo hasta el siguiente fotograma (paso en fotogramas
+`max(1, round(fps * intervalo))`):
+
+| Modo | Intervalo | Cuándo |
+| --- | --- | --- |
+| Denso | `FACE_INTERVAL_DENSE_S` (0.1 s) | El fotograma tiene al menos `FACE_CROWD_FACES` rostros, o aparece un rostro que no continúa ninguno del fotograma analizado anterior (una llegada). Se mantiene al menos `FACE_DENSE_HOLD_S` de video desde el último motivo |
+| Disperso | `FACE_INTERVAL_SPARSE_S` (0.3 s) | 1 o 2 rostros y todos continúan |
+| Inactivo | `FACE_INTERVAL_IDLE_S` (1.0 s) | `FACE_IDLE_FRAMES` fotogramas analizados seguidos sin rostros |
+
+Un rostro continúa si su caja tiene IoU de al menos `LINK_IOU` (0.3) con la de algún
+rostro del fotograma analizado anterior. Cuentan todos los rostros que devuelve
+RetinaFace con su umbral (0.9), no solo los que pasan `MIN_SCORE`. El video empieza en
+denso; un fotograma sin rostros antes de llegar a `FACE_IDLE_FRAMES` conserva el modo que
+había. Los umbrales están en segundos y no en fotogramas, así que no dependen de los fps
+del video.
+
+### Tiempo de proceso
+
+Costo medido en una T4 con P2E_S5_C1 (800x600, 30 fps, mucha gente):
+
+| Parte | Costo |
+| --- | --- |
+| RetinaFace sobre el fotograma completo | unos 139 ms por fotograma con escalado, 87 ms sin él |
+| GhostFaceNet, una llamada a `DeepFace.represent` por rostro | unos 190 ms por rostro |
+| GhostFaceNet en bloques de 64 | unos 3 ms por rostro |
+| Arranque (TensorFlow, modelos, compilación del bloque) | unos 18 s fijos |
+
+Antes el costo lo dominaba GhostFaceNet (rostros por fotograma por 190 ms); con los
+bloques lo domina RetinaFace, que se paga por fotograma analizado. Por eso el muestreo
+adaptativo y `FACE_DETECT_UPSCALE` son las palancas que quedan: el tiempo es
+aproximadamente arranque + fotogramas analizados por el costo de RetinaFace + rostros por
+3 ms.
+
+P2E_S5_C1 (26.9 s de video), `face_identities.py` corrido a mano con
+`venvs/faces/bin/python` (tiempo total del proceso):
+
+| Configuración | Fotogramas analizados | Identidades | Tiempo |
+| --- | --- | --- | --- |
+| `FACE_EMBED_BATCH=0 FACE_ADAPTIVE=0` (como antes) | 269 | 24 | 232 s |
+| `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=0` | 269 | 24 | 60 s |
+| `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=0 FACE_DETECT_UPSCALE=0` | 269 | 24 | 36 s |
+| `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=1` (por defecto) | 221 (215 densos, 2 dispersos, 4 inactivos) | 24 | 53 s |
+
+Las configuraciones 1 y 2 dan las mismas 24 identidades con los mismos 889 rostros
+(fotograma y caja) y el mismo `results.json`. Sin escalado salen 24 identidades con 868
+rostros y con el muestreo adaptativo 24 con 881; en los dos casos cada una comparte
+rostros con una identidad distinta de la configuración 1. `FACE_DETECT_UPSCALE` sigue en
+`1` hasta validar la exactitud sin escalado. En este video casi siempre hay 3 rostros o
+más, así que el muestreo adaptativo ahorra poco; ahorra más en grabaciones con ratos sin
+gente o con pocas personas. En un video corto pesa el arranque fijo de unos 18 s
+(importar TensorFlow, cargar los modelos, la primera llamada de RetinaFace y la
+compilación del bloque de 64).
+
+El worker corta cada etapa tras `STAGE_TIMEOUT` (7200 s por defecto).
+
+Con `FACE_ADAPTIVE=0`, `FACE_INTERVAL_S` sigue siendo la palanca para las grabaciones
+largas: con 0.2 s se analiza la mitad de los fotogramas. Los parámetros de la agrupación
+se validaron con 0.1 s y con otro intervalo hay que revisar el resultado: cada persona deja menos rostros y
 `FACE_MIN_FACES` descarta más identidades, y un tracklet se corta tras `MAX_SKIP`
 fotogramas analizados, que pasan a ser más segundos. En P2E_S5_C1 (24 identidades con
 0.1 s), con 0.2 s siguen saliendo 24 identidades. Con 0.5 s y `FACE_MIN_FACES` 8 quedan
@@ -496,11 +585,13 @@ solo 4; con 5 quedan 17 y con 3 salen 26, ya con algún duplicado posible. En es
 0.2 s no cambia el resultado; con intervalos mayores hay que bajar también
 `FACE_MIN_FACES` y revisar el resultado.
 
+### Opciones y salidas
+
 | Opción | Valor por defecto | Efecto |
 | --- | --- | --- |
 | `--video` | (obligatorio) | Video de entrada |
 | `--faces-dir` | `database/faces_identidades` | Carpeta de salida |
-| `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video `mp4v` de los fotogramas analizados, a `fps / paso` fps, con cada rostro conservado en una caja con su `ID <n>` |
+| `--annotated-video` | (ninguno) | Si se indica, escribe ahí un video `mp4v` de los fotogramas analizados, a `fps / paso` fps (con el paso denso en el muestreo adaptativo, repitiendo cada fotograma hasta el siguiente analizado), con cada rostro conservado en una caja con su `ID <n>` |
 
 Salidas en `--faces-dir`:
 
@@ -508,10 +599,10 @@ Salidas en `--faces-dir`:
 | --- | --- |
 | `<id>/face_of_<id>.jpg` | Mejor rostro de la identidad, con cabeza y hombros |
 | `results.json` | El mismo formato de `face_recognition.py`, con el id de la identidad como `track_id`. `tracks_checked` es el número de identidades, `candidates_checked` el número de rostros de la identidad y `candidate` queda en `null` |
-| `identities.json` | `video`, `fps`, `step`, `analysed_frames` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score` y `px`. No guarda embeddings |
+| `identities.json` | `video`, `fps`, `step` (el paso fijo, `null` con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo con que se analizó su fotograma). No guarda embeddings |
 
-Al terminar imprime cuántos fotogramas analizó, cuántos rostros detectó y cuántas
-identidades conservó.
+Al terminar imprime cuántos fotogramas analizó (por modo, con el muestreo adaptativo),
+cuántos rostros detectó, cuántas identidades conservó y el tiempo total del proceso.
 
 ### Por qué
 
