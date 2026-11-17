@@ -23,6 +23,7 @@ from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
 from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, base_step, detections_record,
                            frame_repeats, read_frames, sample_video, sampling_steps)
 from identity_linking import env_flag, link_identities
+from presence_intervals import format_time
 
 FACES_DIR = os.path.join("database", "faces_identidades")
 RETINA_THRESHOLD = 0.9
@@ -105,9 +106,24 @@ def ranking(face):
                      "sharpness": face["sharpness"], "score": face["score"]})
 
 
-def analyse_video(cap, fps):
+def load_presence(path, fps):
+    try:
+        with open(path) as f:
+            presence = json.load(f)
+        intervals = [(int(start), int(end)) for start, end in presence["intervals"]]
+        active_fraction = float(presence["active_fraction"])
+        presence_fps = float(presence["fps"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise SystemExit(f"No se pudo leer el archivo de presencia {path}: {exc}")
+    if abs(presence_fps - fps) > 1e-3:
+        raise SystemExit(f"El archivo de presencia {path} es de un video con {presence_fps} "
+                         f"fotogramas por segundo y este tiene {fps}")
+    return {"intervals": intervals, "active_fraction": active_fraction}
+
+
+def analyse_video(cap, fps, intervals=None):
     detections, pending, sampled = [], [], []
-    for frame_idx, mode, faces in sample_video(cap, fps, ADAPTIVE, detect_faces):
+    for frame_idx, mode, faces in sample_video(cap, fps, ADAPTIVE, detect_faces, intervals):
         sampled.append((frame_idx, mode))
         detections.extend(faces)
         pending.extend(faces)
@@ -118,7 +134,8 @@ def analyse_video(cap, fps):
     return detections, sampled, sampling_steps(fps, ADAPTIVE)
 
 
-def render_outputs(video_path, sampled, video_step, fps, identities, faces_dir, annotated_path):
+def render_outputs(video_path, sampled, video_step, fps, identities, faces_dir, annotated_path,
+                   gated=False):
     best = {}
     labels = {}
     for identity_id, faces in enumerate(identities, start=1):
@@ -132,7 +149,7 @@ def render_outputs(video_path, sampled, video_step, fps, identities, faces_dir, 
 
     saved = {}
     last_needed = max(best) if best else -1
-    repeats = frame_repeats(sampled, video_step)
+    repeats = {idx: 1 for idx in sampled} if gated else frame_repeats(sampled, video_step)
     targets = iter(sampled[1:])
     writer = None
     cap = open_video(video_path)
@@ -165,6 +182,9 @@ def render_outputs(video_path, sampled, video_step, fps, identities, faces_dir, 
                     cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
                     cv2.putText(frame, f"ID {identity_id}", (x1, max(12, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, BOX_COLOR, 1, cv2.LINE_AA)
+                if gated:
+                    cv2.putText(frame, format_time(frame_idx / fps), (8, 20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, BOX_COLOR, 1, cv2.LINE_AA)
                 for _ in range(repeats[frame_idx]):
                     writer.write(frame)
             elif frame_idx >= last_needed:
@@ -213,6 +233,11 @@ def parse_args():
     parser.add_argument("--faces-dir", default=FACES_DIR, help="carpeta de salida")
     parser.add_argument("--annotated-video", default=None,
                         help="si se indica, escribe ahí un video con las identidades")
+    parser.add_argument("--presence", default=None, metavar="PRESENCE_JSON",
+                        help="archivo presence.json de presence_gate.py: solo se analizan los "
+                             "fotogramas de los tramos con alguien en cámara")
+    parser.add_argument("--no-gating", action="store_true",
+                        help="ignora el archivo de presencia y analiza todo el video")
     return parser.parse_args()
 
 
@@ -222,13 +247,29 @@ def sampling_summary(frames_per_mode, steps):
     return ", ".join(f"{MODE_LABELS[mode]}: {count}" for mode, count in frames_per_mode.items())
 
 
+def analysed_summary(analysed, total_frames, step, presence):
+    possible = -(-int(total_frames) // step) if total_frames > 0 else 0
+    text = f"Fotogramas analizados: {analysed}"
+    if possible:
+        text += f" de {possible} posibles ({analysed / possible:.1%})"
+    if presence:
+        text += f"; compuerta activa el {presence['active_fraction']:.1%} del video"
+    return text
+
+
 def main():
     args = parse_args()
+    gating = bool(args.presence) and not args.no_gating
+    if gating and ADAPTIVE:
+        raise SystemExit("La compuerta de presencia no se puede usar con FACE_ADAPTIVE=1: "
+                         "use FACE_ADAPTIVE=0 o --no-gating")
     cap = open_video(args.video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    presence = load_presence(args.presence, fps) if gating else None
     try:
-        detections, sampled, steps = analyse_video(cap, fps)
+        detections, sampled, steps = analyse_video(
+            cap, fps, presence["intervals"] if presence else None)
     finally:
         cap.release()
 
@@ -236,7 +277,7 @@ def main():
     os.makedirs(args.faces_dir, exist_ok=True)
     saved, annotated = render_outputs(args.video, [idx for idx, _ in sampled],
                                       base_step(steps), fps, identities, args.faces_dir,
-                                      args.annotated_video)
+                                      args.annotated_video, gated=gating)
 
     results = []
     for identity_id, faces in enumerate(identities, start=1):
@@ -253,6 +294,9 @@ def main():
             "fps": fps,
             "step": base_step(steps),
             "adaptive": ADAPTIVE,
+            "gating": gating,
+            **({"intervals": [list(i) for i in presence["intervals"]],
+                "active_fraction": presence["active_fraction"]} if gating else {}),
             "steps": steps,
             "analysed_frames": len(sampled),
             "frames_per_mode": frames_per_mode,
@@ -263,13 +307,14 @@ def main():
 
     with open(os.path.join(args.faces_dir, DETECTIONS_NAME), "w") as f:
         json.dump(detections_record(fps, base_step(steps), [idx for idx, _ in sampled],
-                                    detections), f)
+                                    detections, presence), f)
 
     print(f"\nSe analizaron {len(sampled)} fotogramas "
           f"({sampling_summary(frames_per_mode, steps)}), se detectaron {len(detections)} "
           f"rostros y se conservaron {len(identities)} identidades; se guardó el mejor "
           f"rostro de {len(results)} en {args.faces_dir}")
     duration = f" para {total_frames / fps:.1f} s de video" if total_frames > 0 else ""
+    print(analysed_summary(len(sampled), total_frames, base_step(steps), presence))
     print(f"Tiempo total: {wall_time_s:.1f} s{duration}")
     if annotated:
         print(f"Video anotado escrito en {args.annotated_video}")
