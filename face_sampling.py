@@ -8,7 +8,7 @@ SPARSE = "sparse"
 IDLE = "idle"
 MODE_LABELS = {FIXED: "fijo", DENSE: "denso", SPARSE: "disperso", IDLE: "inactivo"}
 
-ADAPTIVE = env_flag("FACE_ADAPTIVE", True)
+ADAPTIVE = env_flag("FACE_ADAPTIVE", False)
 INTERVAL_S = env_positive_float("FACE_INTERVAL_S", 0.1)
 INTERVAL_DENSE_S = env_positive_float("FACE_INTERVAL_DENSE_S", 0.1)
 INTERVAL_SPARSE_S = env_positive_float("FACE_INTERVAL_SPARSE_S", 0.3)
@@ -91,6 +91,16 @@ def sample_video(cap, fps, adaptive, detect):
             face["interval_s"] = steps[state["mode"]] / fps
         sample += 1
         yield frame_idx, mode, faces
+
+
+def detections_record(fps, step, frames_analysed, detections):
+    return {
+        "fps": fps,
+        "step": step,
+        "frames_analysed": list(frames_analysed),
+        "detections": [{"frame": d["frame"], "time_s": d["frame"] / fps, "box": list(d["box"]),
+                        "score": d["score"], "px": d["px"]} for d in detections],
+    }
 
 
 def base_step(steps):

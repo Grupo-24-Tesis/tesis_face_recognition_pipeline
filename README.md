@@ -275,7 +275,7 @@ consulta SQS sin parar. Variables:
 | Variable | Valor por defecto | Uso |
 | --- | --- | --- |
 | `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
-| `FACE_ADAPTIVE` | `1` | Solo en el modo `faces`: `1` muestreo adaptativo, `0` intervalo fijo `FACE_INTERVAL_S` |
+| `FACE_ADAPTIVE` | `0` | Solo en el modo `faces`: `0` intervalo fijo `FACE_INTERVAL_S`, `1` muestreo adaptativo |
 | `FACE_MIN_FACES` | `8` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: rostros mínimos para conservar una identidad. Entero positivo |
 | `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: segundos de video entre fotogramas analizados. Número positivo |
 | Otras `FACE_*` | | Las demás variables del modo `faces` (`FACE_EMBED_BATCH`, `FACE_DETECT_UPSCALE`, los intervalos y umbrales del muestreo adaptativo y la presencia mínima): ver la sección del modo `faces` |
@@ -433,9 +433,9 @@ Corre en `venvs/faces`, en un solo proceso, y no usa el tracker del cuerpo. Busc
 los rostros del video y los agrupa en identidades con sus embeddings:
 
 1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`). Con
-   `FACE_ADAPTIVE=1` (por defecto) `face_sampling.py` elige tras cada fotograma analizado
+   `FACE_ADAPTIVE=1` `face_sampling.py` elige tras cada fotograma analizado
    cuánto avanzar hasta el siguiente (ver "Muestreo adaptativo"); con `FACE_ADAPTIVE=0`
-   analiza un fotograma cada `FACE_INTERVAL_S` segundos.
+   (por defecto) analiza un fotograma cada `FACE_INTERVAL_S` segundos.
 2. Corre RetinaFace sobre el fotograma completo, con escalado (`allow_upscaling`) si
    `FACE_DETECT_UPSCALE=1`.
 3. Alinea cada rostro con sus cinco puntos a la plantilla de ArcFace de 112x112 px.
@@ -508,7 +508,7 @@ por defecto; con un valor no válido el script se detiene con un mensaje:
 | --- | --- | --- | --- |
 | `FACE_EMBED_BATCH` | `1` | `0` o `1` | `1` calcula los embeddings en bloques; `0` vuelve a una llamada de DeepFace por rostro |
 | `FACE_DETECT_UPSCALE` | `1` | `0` o `1` | `allow_upscaling` de RetinaFace. `0` es más rápido y puede perder rostros pequeños |
-| `FACE_ADAPTIVE` | `1` | `0` o `1` | `1` muestreo adaptativo; `0` intervalo fijo `FACE_INTERVAL_S` y regla `FACE_MIN_FACES`, como antes |
+| `FACE_ADAPTIVE` | `0` | `0` o `1` | `0` intervalo fijo `FACE_INTERVAL_S` y regla `FACE_MIN_FACES`; `1` muestreo adaptativo, que en la evaluación perdió 7 de 78 personas |
 | `FACE_INTERVAL_DENSE_S` | `0.1` | Número positivo, en segundos | Intervalo denso del muestreo adaptativo |
 | `FACE_INTERVAL_SPARSE_S` | `0.3` | Número positivo, en segundos | Intervalo disperso del muestreo adaptativo |
 | `FACE_INTERVAL_IDLE_S` | `1.0` | Número positivo, en segundos | Intervalo sin rostros del muestreo adaptativo |
@@ -564,7 +564,7 @@ P2E_S5_C1 (26.9 s de video), `face_identities.py` corrido a mano con
 | `FACE_EMBED_BATCH=0 FACE_ADAPTIVE=0` (como antes) | 269 | 24 | 232 s |
 | `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=0` | 269 | 24 | 60 s |
 | `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=0 FACE_DETECT_UPSCALE=0` | 269 | 24 | 36 s |
-| `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=1` (por defecto) | 221 (215 densos, 2 dispersos, 4 inactivos) | 24 | 53 s |
+| `FACE_EMBED_BATCH=1 FACE_ADAPTIVE=1` | 221 (215 densos, 2 dispersos, 4 inactivos) | 24 | 53 s |
 
 Las configuraciones 1 y 2 dan las mismas 24 identidades con los mismos 889 rostros
 (fotograma y caja) y el mismo `results.json`. Sin escalado salen 24 identidades con 868
@@ -602,6 +602,7 @@ Salidas en `--faces-dir`:
 | --- | --- |
 | `<id>/face_of_<id>.jpg` | Mejor rostro de la identidad, con cabeza y hombros |
 | `results.json` | El mismo formato de `face_recognition.py`, con el id de la identidad como `track_id`. `tracks_checked` es el número de identidades, `candidates_checked` el número de rostros de la identidad y `candidate` queda en `null` |
+| `detections.json` | `fps`, `step`, `frames_analysed` (índices de los fotogramas analizados) y `detections`, con `frame`, `time_s`, `box`, `score` y `px` de cada rostro que devolvió RetinaFace en cada fotograma analizado, antes de los filtros de identidad |
 | `identities.json` | `video`, `fps`, `step` (el paso fijo, o el paso denso con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo que se eligió después de su fotograma y que el rostro aporta a la presencia). No guarda embeddings |
 
 Al terminar imprime cuántos fotogramas analizó (por modo, con el muestreo adaptativo),

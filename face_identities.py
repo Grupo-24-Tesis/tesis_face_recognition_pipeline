@@ -20,8 +20,8 @@ from retinaface import RetinaFace
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
 from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
-from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, base_step, frame_repeats, read_frames,
-                           sample_video, sampling_steps)
+from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, base_step, detections_record,
+                           frame_repeats, read_frames, sample_video, sampling_steps)
 from identity_linking import env_flag, link_identities
 
 FACES_DIR = os.path.join("database", "faces_identidades")
@@ -33,6 +33,7 @@ ALIGNED_SIZE = 112
 ARCFACE_TEMPLATE = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 71.7366],
                              [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float32)
 IDENTITIES_NAME = "identities.json"
+DETECTIONS_NAME = "detections.json"
 BOX_COLOR = (0, 255, 0)
 
 
@@ -259,6 +260,10 @@ def main():
             "identities": [identity_record(k, faces, fps)
                            for k, faces in enumerate(identities, start=1)],
         }, f, indent=2)
+
+    with open(os.path.join(args.faces_dir, DETECTIONS_NAME), "w") as f:
+        json.dump(detections_record(fps, base_step(steps), [idx for idx, _ in sampled],
+                                    detections), f)
 
     print(f"\nSe analizaron {len(sampled)} fotogramas "
           f"({sampling_summary(frames_per_mode, steps)}), se detectaron {len(detections)} "
