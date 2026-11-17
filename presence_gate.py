@@ -1,17 +1,27 @@
 import argparse
 import json
 import os
+import sys
 import time
 
-from identity_linking import env_positive_float, env_positive_int
+from identity_linking import env_non_negative_float, env_positive_float, env_positive_int
 from presence_intervals import active_intervals, format_time, switch_log
 
-YOLO_WEIGHTS = "yolo26m.pt"
+YOLO_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo26m.pt")
 PERSON_CLASS = 0
 CHECKS_PER_S = env_positive_float("GATE_CHECKS_PER_S", 4.0)
-REWIND_S = env_positive_float("GATE_REWIND_S", 1.0)
-EXIT_S = env_positive_float("GATE_EXIT_S", 2.0)
-CONF = env_positive_float("GATE_CONF", 0.25)
+REWIND_S = env_non_negative_float("GATE_REWIND_S", 1.0)
+EXIT_S = env_non_negative_float("GATE_EXIT_S", 2.0)
+
+
+def gate_conf():
+    value = env_positive_float("GATE_CONF", 0.25)
+    if value > 1:
+        raise SystemExit(f"GATE_CONF debe estar entre 0 y 1, no {value!r}")
+    return value
+
+
+CONF = gate_conf()
 IMGSZ = env_positive_int("GATE_IMGSZ", 640)
 
 
@@ -33,13 +43,16 @@ def read_checks(cap, step, person_present):
             continue
         ok, frame = cap.retrieve()
         if not ok:
-            break
+            print(f"No se pudo leer el fotograma {frame_idx}: se cuenta como presencia y se "
+                  f"sigue", file=sys.stderr)
+            checks.append([frame_idx, True])
+            continue
         checks.append([frame_idx, bool(person_present(frame))])
     return checks, frame_idx + 1
 
 
-def build_document(video, fps, declared_frames, step, checks, frames_read, wall_s):
-    total_frames = declared_frames if declared_frames > 0 else frames_read
+def build_document(video, fps, step, checks, frames_read, wall_s):
+    total_frames = frames_read
     intervals = active_intervals(checks, fps, total_frames, REWIND_S, EXIT_S)
     active_frames = sum(end - start + 1 for start, end in intervals)
     return {
@@ -91,14 +104,13 @@ def main():
     if not cap.isOpened():
         raise SystemExit(f"No se pudo abrir el video: {args.video}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    declared_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     step = check_step(fps)
     person_present = load_detector()
     try:
         checks, frames_read = read_checks(cap, step, person_present)
     finally:
         cap.release()
-    document = build_document(args.video, fps, declared_frames, step, checks, frames_read,
+    document = build_document(args.video, fps, step, checks, frames_read,
                               time.monotonic() - started)
     out_dir = os.path.dirname(os.path.abspath(args.out))
     os.makedirs(out_dir, exist_ok=True)

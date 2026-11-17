@@ -1,4 +1,4 @@
-from bisect import bisect_left
+from bisect import bisect_right
 
 
 def format_time(seconds):
@@ -46,7 +46,7 @@ def event(kind, frame, trigger, fps):
 
 
 def frame_in_intervals(frame_idx, intervals):
-    position = bisect_left(intervals, (frame_idx + 1,)) - 1
+    position = bisect_right(intervals, frame_idx, key=lambda interval: interval[0]) - 1
     return position >= 0 and intervals[position][0] <= frame_idx <= intervals[position][1]
 
 

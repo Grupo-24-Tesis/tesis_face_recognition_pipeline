@@ -30,6 +30,19 @@ def env_positive_float(name, default):
     return number
 
 
+def env_non_negative_float(name, default):
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        number = -1.0
+    if not math.isfinite(number) or number < 0:
+        raise SystemExit(f"{name} debe ser un número no negativo, no {value!r}")
+    return number
+
+
 def env_flag(name, default):
     value = os.environ.get(name, "").strip()
     if not value:
