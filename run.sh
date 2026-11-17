@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 set -e
 
-GATING=1
+GATING="${FACE_GATING:-1}"
+if [ "$GATING" != "0" ] && [ "$GATING" != "1" ]; then
+  echo "FACE_GATING debe ser 0 o 1, no '$GATING'" >&2
+  exit 1
+fi
+
 POSITIONAL=()
 for ARG in "$@"; do
   if [ "$ARG" = "--no-gating" ]; then
@@ -19,6 +24,11 @@ fi
 MODE="${PIPELINE_MODE:-faces}"
 if [ "$MODE" != "faces" ] && [ "$MODE" != "tracks" ]; then
   echo "PIPELINE_MODE desconocido '$MODE': use faces o tracks" >&2
+  exit 1
+fi
+
+if [ "$MODE" = "faces" ] && [ "$GATING" = "1" ] && [ "${FACE_ADAPTIVE:-0}" = "1" ]; then
+  echo "La compuerta de presencia no se puede usar con FACE_ADAPTIVE=1: use FACE_ADAPTIVE=0, FACE_GATING=0 o --no-gating" >&2
   exit 1
 fi
 

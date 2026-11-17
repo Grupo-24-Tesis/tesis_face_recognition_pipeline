@@ -421,13 +421,15 @@ de su venv es lo que garantiza que corra sobre el stack correcto.
 PIPELINE_MODE=tracks ./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
 ```
 
-`run.sh` usa `PIPELINE_MODE` igual que el worker (`faces` por defecto) y se detiene con
-un error si tiene otro valor. La salida va a `database/run/<nombre del video>/` si no se
-indica otra carpeta.
+`run.sh` usa `PIPELINE_MODE` y `FACE_GATING` igual que el worker (`faces` y `1` por
+defecto) y se detiene con un error si alguno tiene otro valor. La salida va a
+`database/run/<nombre del video>/` si no se indica otra carpeta.
 
-En el modo `faces` corre `presence_gate.py` (escribe `presence.json`) y después
-`face_identities.py` con `--presence`; con `--no-gating` omite la compuerta y analiza todo
-el video. Escribe `faces/` e `identities.mp4`, el video de los fotogramas analizados con
+En el modo `faces` con `FACE_GATING=1` corre `presence_gate.py` (escribe
+`presence.json`) y después `face_identities.py` con `--presence`; con `FACE_GATING=0` o
+`--no-gating` (que gana sobre `FACE_GATING=1`) omite la compuerta y analiza todo el video.
+Con `FACE_ADAPTIVE=1` y la compuerta activa se detiene con un error antes de correr la
+compuerta. Escribe `faces/` e `identities.mp4`, el video de los fotogramas analizados con
 cada rostro conservado en una caja con su `ID <n>`; con la compuerta solo trae los
 fotogramas analizados de los tramos activos, cada uno con su tiempo de origen
 (`HH:MM:SS.s`). Cada ejecución borra antes `faces/` de esa carpeta. `--no-gating` no
@@ -586,8 +588,9 @@ medidos de la compuerta":
 Con `FACE_ADAPTIVE=1` la compuerta no se admite: `face_identities.py --presence` se
 detiene con un error y el worker no arranca si tiene `FACE_ADAPTIVE=1` y `FACE_GATING=1`
 en el modo `faces`. Para ignorar el archivo de presencia en `face_identities.py` está
-`--no-gating`, y en `run.sh` la misma opción omite la compuerta. En el worker se desactiva
-con `FACE_GATING=0`.
+`--no-gating`. En el worker y en `run.sh` se desactiva con `FACE_GATING=0`, y en `run.sh`
+también con `--no-gating`; `run.sh` rechaza `FACE_ADAPTIVE=1` con la compuerta antes de
+correrla.
 
 El worker valida `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF` y
 `GATE_IMGSZ` al arrancar en el modo `faces` con `FACE_GATING=1`, con las mismas reglas y
