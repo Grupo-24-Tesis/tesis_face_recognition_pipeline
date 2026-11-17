@@ -552,7 +552,8 @@ YOLO26m busca personas unas pocas veces por segundo, y `face_identities.py` solo
 los fotogramas de los tramos donde alguien apareció. Los fotogramas analizados son un
 subconjunto exacto de los que se analizarían sin ella, así que las detecciones son un
 subconjunto de las de la corrida sin compuerta. Las detecciones y las identidades son
-iguales a las de esa corrida cuando los tramos omitidos no tienen rostros (los números de
+iguales a las de esa corrida, salvo diferencias numéricas de la GPU del orden de 1e-7 en
+los puntajes, cuando los tramos omitidos no tienen rostros (los números de
 muestra coinciden y un hueco corto se trata igual en ambas, ver "Agrupación"), y fueron
 iguales en todas las mediciones (ver "Resultados medidos de la compuerta").
 
@@ -625,8 +626,8 @@ Modelo de costo, por hora de video:
   el costo por fotograma de la pasada de rostros sin compuerta. Ahorra mientras `f` sea
   pequeña y la compuerta más ese costo fijo cuesten menos que la parte omitida de la
   pasada de rostros. En el video largo, sin el costo fijo la cuenta daría
-  171 + 0.043 x 3645 = 328 s contra 466 s medidos; la diferencia, unos 140 s, es ese
-  costo fijo.
+  171 + 0.043 x 3645 = 328 s contra 466 s medidos; la diferencia, unos 140 s, se
+  explica por ese costo fijo.
 
 Formato de `presence.json`:
 
