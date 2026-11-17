@@ -83,6 +83,16 @@ def video_timestamp(seconds):
     return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
 
 
+def face_gating_enabled():
+    value = os.environ.get("FACE_GATING", "").strip()
+    if value not in ("", "0", "1"):
+        raise SystemExit(f"FACE_GATING debe ser 0 o 1, no {value!r}")
+    return value != "0"
+
+
+FACE_GATING = face_gating_enabled()
+
+
 def run_stage(python, script, *args):
     cmd = [python, os.path.join(REPO_DIR, script), *args]
     log.info("ejecutando %s", " ".join(cmd))
@@ -104,8 +114,13 @@ def check_pipeline_mode():
 def run_pipeline(video_path, job_dir):
     faces_dir = os.path.join(job_dir, "faces")
     if PIPELINE_MODE == "faces":
-        run_stage(FACES_PYTHON, "face_identities.py",
-                  "--video", video_path, "--faces-dir", faces_dir)
+        face_args = ["--video", video_path, "--faces-dir", faces_dir]
+        if FACE_GATING:
+            presence_path = os.path.join(job_dir, "presence.json")
+            run_stage(TRACK_PYTHON, "presence_gate.py",
+                      "--video", video_path, "--out", presence_path)
+            face_args += ["--presence", presence_path]
+        run_stage(FACES_PYTHON, "face_identities.py", *face_args)
     else:
         candidates_dir = os.path.join(job_dir, "candidates")
         run_stage(TRACK_PYTHON, "tracking.py",
