@@ -1,6 +1,8 @@
 import math
 
-from identity_linking import LINK_IOU, env_flag, env_positive_float, env_positive_int, iou
+from identity_linking import (LINK_IOU, MAX_SKIP, env_flag, env_positive_float,
+                              env_positive_int, iou)
+from presence_intervals import next_allowed
 
 FIXED = "fixed"
 DENSE = "dense"
@@ -78,12 +80,29 @@ def read_frames(cap, first, next_target):
         target = next_target(frame_idx)
 
 
-def sample_video(cap, fps, adaptive, detect):
+def sample_video(cap, fps, adaptive, detect, intervals=None):
     steps = sampling_steps(fps, adaptive)
     hold = hold_frames(fps)
     state = start_state(adaptive)
+    if intervals is None:
+        first = 0
+
+        def next_target(idx):
+            return idx + steps[state["mode"]]
+    else:
+        if adaptive:
+            raise ValueError("la compuerta de presencia no admite el muestreo adaptativo")
+        step = steps[FIXED]
+        first = next_allowed(0, step, intervals)
+
+        def next_target(idx):
+            return next_allowed(idx + step, step, intervals)
     sample = 0
-    for frame_idx, frame in read_frames(cap, 0, lambda idx: idx + steps[state["mode"]]):
+    previous = None
+    for frame_idx, frame in read_frames(cap, first, next_target):
+        if intervals is not None and previous is not None and frame_idx - previous != step:
+            sample += MAX_SKIP + 1
+        previous = frame_idx
         mode = state["mode"]
         faces = detect(frame_idx, frame, sample)
         state = advance(state, [face["box"] for face in faces], frame_idx, hold)
@@ -93,14 +112,19 @@ def sample_video(cap, fps, adaptive, detect):
         yield frame_idx, mode, faces
 
 
-def detections_record(fps, step, frames_analysed, detections):
-    return {
+def detections_record(fps, step, frames_analysed, detections, presence=None):
+    record = {
         "fps": fps,
         "step": step,
+        "gating": presence is not None,
         "frames_analysed": list(frames_analysed),
         "detections": [{"frame": d["frame"], "time_s": d["frame"] / fps, "box": list(d["box"]),
                         "score": d["score"], "px": d["px"]} for d in detections],
     }
+    if presence is not None:
+        record["intervals"] = [list(interval) for interval in presence["intervals"]]
+        record["active_fraction"] = presence["active_fraction"]
+    return record
 
 
 def base_step(steps):
