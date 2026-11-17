@@ -9,7 +9,7 @@ from presence_intervals import active_intervals, format_time, switch_log
 
 YOLO_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo26m.pt")
 PERSON_CLASS = 0
-CHECKS_PER_S = env_positive_float("GATE_CHECKS_PER_S", 4.0)
+CHECKS_PER_S = env_positive_float("GATE_CHECKS_PER_S", 2.0)
 REWIND_S = env_non_negative_float("GATE_REWIND_S", 1.0)
 EXIT_S = env_non_negative_float("GATE_EXIT_S", 2.0)
 

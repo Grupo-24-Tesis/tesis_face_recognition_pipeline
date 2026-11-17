@@ -279,7 +279,7 @@ consulta SQS sin parar. Variables:
 | `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
 | `FACE_ADAPTIVE` | `0` | Solo en el modo `faces`: `0` intervalo fijo `FACE_INTERVAL_S`, `1` muestreo adaptativo |
 | `FACE_GATING` | `1` | Solo en el modo `faces`: `1` corre antes la compuerta de presencia y analiza solo los tramos con alguien en cámara; `0` analiza todo el video. Con otro valor el worker no arranca. Ver "Compuerta de presencia" |
-| `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF`, `GATE_IMGSZ` | `4`, `1.0`, `2.0`, `0.25`, `640` | Ajustes de la compuerta (ver "Compuerta de presencia"); el worker se los pasa tal cual a `presence_gate.py` |
+| `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF`, `GATE_IMGSZ` | `2`, `1.0`, `2.0`, `0.25`, `640` | Ajustes de la compuerta (ver "Compuerta de presencia"); el worker se los pasa tal cual a `presence_gate.py` |
 | `FACE_MIN_FACES` | `8` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: rostros mínimos para conservar una identidad. Entero positivo |
 | `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: segundos de video entre fotogramas analizados. Número positivo |
 | Otras `FACE_*` | | Las demás variables del modo `faces` (`FACE_EMBED_BATCH`, `FACE_DETECT_UPSCALE`, los intervalos y umbrales del muestreo adaptativo y la presencia mínima): ver la sección del modo `faces` |
@@ -566,13 +566,13 @@ convivir en un proceso en esta máquina. Se comunican por un archivo, `presence.
    vuelve atrás en el video.
 
 Variables de la compuerta (las lee `presence_gate.py`; vacías usan el valor por defecto
-y un valor no válido detiene el script con un mensaje). Los valores por defecto son
-provisionales, hasta que se mida su efecto:
+y un valor no válido detiene el script con un mensaje). Los valores por defecto salen del
+barrido de umbrales descrito en "Resultados medidos de la compuerta":
 
 | Variable | Valor por defecto | Valores válidos | Para qué |
 | --- | --- | --- | --- |
 | `FACE_GATING` | `1` | `0` o `1` | La lee el worker. `1` corre la compuerta antes de `face_identities.py`; `0` analiza todo el video, como antes |
-| `GATE_CHECKS_PER_S` | `4` | Número positivo | Revisiones de YOLO por segundo de video |
+| `GATE_CHECKS_PER_S` | `2` | Número positivo | Revisiones de YOLO por segundo de video |
 | `GATE_REWIND_S` | `1.0` | Número no negativo, en segundos (0 desactiva el margen) | Cuánto antes de la detección empieza el tramo, para no perder a quien YOLO ve tarde |
 | `GATE_EXIT_S` | `2.0` | Número no negativo, en segundos (0 desactiva el margen) | Cuánto después de la última detección sigue activo el tramo |
 | `GATE_CONF` | `0.25` | Número mayor que 0 y hasta 1 | Confianza mínima de YOLO para contar una persona |
@@ -626,6 +626,45 @@ resumen con las revisiones, la fracción activa y el tiempo.
 pasada de rostros avanzó de verdad). Si el video entrega más de un segundo de fotogramas
 menos de los que `presence.json` implica, imprime una advertencia: puede ser el archivo
 de otro video. En su resumen imprime la fracción de fotogramas analizados.
+
+### Resultados medidos de la compuerta
+
+Medido en una T4 contra la misma configuración sin compuerta (`--no-gating`). Una
+detección perdida es una cara que la corrida sin compuerta encontró y la corrida con
+compuerta no.
+
+| Conjunto | Sin compuerta | Con compuerta | Detecciones perdidas | Personas encontradas |
+| --- | --- | --- | --- | --- |
+| Video de 45 min, 4.3 % con personas (ChokePoint unido con tramos vacíos) | 3645 s (factor 1.35) | 468 s (factor 0.17: compuerta 170 s, rostros 298 s) | 0 | 15 de 15 en ambas |
+| 78 videos de ChokePoint (portales 1 y 2, entrando y saliendo, más los de mucha gente) | factor 1.66 en 69 de ellos | factor 1.80 en esos 69, medido con 4 revisiones por segundo | 0 con 4 revisiones por segundo (corrida real) y con 2 (barrido) | iguales |
+| Camera3 y Camera_ch6 (residenciales, 960x480) | factor 1.75 y 1.60 | factor 1.81 y 1.69 | 0 | iguales |
+| Casos borde: persona desde el fotograma 0, hasta el último, menos de 1 s, varias seguidas, quieta 60 s | | | 0 | iguales |
+
+- La compuerta no cambia los rostros ni las identidades en ningún video medido.
+- Ahorra en videos mayormente vacíos: el video largo es 7.8 veces más rápido. En clips
+  casi siempre ocupados (86 a 100 % activos) cuesta entre 4 y 9 % más, porque se suma la
+  pasada de la compuerta y no hay tramos que saltar.
+- Con 4.3 % activo, el costo que queda es la compuerta (0.06 veces la duración) más la
+  pasada de rostros, que decodifica con `grab()` todo el video y carga los modelos.
+
+Barrido de umbrales: las revisiones por segundo y el tamaño de imagen se corrieron de
+verdad (`GATE_CHECKS_PER_S` 2 y 4, `GATE_IMGSZ` 320 y 640, con confianza mínima 0.05 y la
+confianza de cada revisión guardada). `GATE_CONF` (0.1, 0.25, 0.4) y `GATE_EXIT_S` (1 y
+2) se aplicaron después sobre esos archivos, simulando la pasada de rostros a partir de
+la corrida sin compuerta, lo que es exacto porque los fotogramas analizados con compuerta
+son un subconjunto de los de la corrida sin ella. Los umbrales se eligieron con el portal 1
+y se confirmaron con el portal 2 y las dos cámaras residenciales:
+
+- Con `GATE_IMGSZ` 640 ninguna combinación pierde una detección.
+- Con `GATE_IMGSZ` 320, YOLO no ve a las personas pequeñas y lejanas de Camera_ch6: con
+  2 revisiones por segundo pierde hasta 36 detecciones (5 puntos de exhaustividad en ese
+  video), y con 4 revisiones por segundo y confianza 0.4 pierde 13.
+- Se eligió 2 revisiones por segundo a 640: es lo más barato sin pérdidas, la compuerta
+  cuesta un 32 % menos que con 4, y toda la gama de confianza de 0.1 a 0.4 queda sin
+  pérdidas, así que 0.25 tiene margen hacia ambos lados.
+- Con 2 revisiones por segundo, una persona visible menos de 0.5 s puede no activar la
+  compuerta. Tal aparición no forma identidad de todos modos: hacen falta
+  `FACE_MIN_FACES` (8) rostros, unos 0.8 s con `FACE_INTERVAL_S` 0.1.
 
 ### Muestreo adaptativo
 
