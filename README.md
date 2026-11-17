@@ -552,8 +552,10 @@ convivir en un proceso en esta máquina. Se comunican por un archivo, `presence.
 
 1. `presence_gate.py` (`venvs/track`) lee el video en orden con `grab()`, recupera
    (`retrieve()`) un fotograma cada `max(1, round(fps / GATE_CHECKS_PER_S))` empezando por
-   el 0, y corre `YOLO(yolo26m.pt)` solo con la clase persona. Hay presencia si detecta al
-   menos una caja.
+   el 0, y corre `YOLO(yolo26m.pt)` (los pesos junto al script, así que no importa desde
+   qué carpeta se lance) solo con la clase persona. Hay presencia si detecta al menos una
+   caja. Si un fotograma no se puede decodificar, imprime un aviso, lo cuenta como
+   presencia (así la pasada de rostros queda activa) y sigue leyendo.
 2. Cada fotograma con persona abre o amplía un tramo activo que cubre desde
    `GATE_REWIND_S` segundos antes hasta `GATE_EXIT_S` segundos después. Los tramos que se
    solapan o se tocan se unen, y se recortan a los límites del video.
@@ -571,13 +573,14 @@ provisionales, hasta que se mida su efecto:
 | --- | --- | --- | --- |
 | `FACE_GATING` | `1` | `0` o `1` | La lee el worker. `1` corre la compuerta antes de `face_identities.py`; `0` analiza todo el video, como antes |
 | `GATE_CHECKS_PER_S` | `4` | Número positivo | Revisiones de YOLO por segundo de video |
-| `GATE_REWIND_S` | `1.0` | Número positivo, en segundos | Cuánto antes de la detección empieza el tramo, para no perder a quien YOLO ve tarde |
-| `GATE_EXIT_S` | `2.0` | Número positivo, en segundos | Cuánto después de la última detección sigue activo el tramo |
-| `GATE_CONF` | `0.25` | Número positivo | Confianza mínima de YOLO para contar una persona |
+| `GATE_REWIND_S` | `1.0` | Número no negativo, en segundos (0 desactiva el margen) | Cuánto antes de la detección empieza el tramo, para no perder a quien YOLO ve tarde |
+| `GATE_EXIT_S` | `2.0` | Número no negativo, en segundos (0 desactiva el margen) | Cuánto después de la última detección sigue activo el tramo |
+| `GATE_CONF` | `0.25` | Número mayor que 0 y hasta 1 | Confianza mínima de YOLO para contar una persona |
 | `GATE_IMGSZ` | `640` | Entero positivo | Tamaño de imagen de YOLO |
 
 Con `FACE_ADAPTIVE=1` la compuerta no se admite: `face_identities.py --presence` se
-detiene con un error. Para ignorar el archivo de presencia en `face_identities.py` está
+detiene con un error y el worker no arranca si tiene `FACE_ADAPTIVE=1` y `FACE_GATING=1`
+en el modo `faces`. Para ignorar el archivo de presencia en `face_identities.py` está
 `--no-gating`, y en `run.sh` la misma opción omite la compuerta. En el worker se desactiva
 con `FACE_GATING=0`.
 
@@ -599,7 +602,7 @@ Formato de `presence.json`:
 | Campo | Contenido |
 | --- | --- |
 | `video` | Nombre del archivo de video |
-| `fps`, `total_frames` | Fotogramas por segundo y fotogramas del video (si el contenedor no declara la cantidad, los leídos) |
+| `fps`, `total_frames` | Fotogramas por segundo y fotogramas que la compuerta leyó de verdad (no el conteo que declara el contenedor, que puede ser menor) |
 | `check_step` | Fotogramas entre dos revisiones |
 | `settings` | Los valores de `GATE_*` con que se corrió |
 | `checks` | Lista de `[fotograma, hay_persona]` en orden |
@@ -617,8 +620,11 @@ por ejemplo `activo desde 00:01:02.3 (persona a las 00:01:03.3)`, y una línea d
 resumen con las revisiones, la fracción activa y el tiempo.
 
 `face_identities.py` escribe `"gating": true|false` en `detections.json` y en
-`identities.json`; con la compuerta agrega `intervals` y `active_fraction`, y en su
-resumen imprime la fracción de fotogramas analizados.
+`identities.json`; con la compuerta agrega `intervals` y `active_fraction`, y en
+`detections.json` además `presence_total_frames` y `frames_read` (los fotogramas que la
+pasada de rostros avanzó de verdad). Si el video entrega más de un segundo de fotogramas
+menos de los que `presence.json` implica, imprime una advertencia: puede ser el archivo
+de otro video. En su resumen imprime la fracción de fotogramas analizados.
 
 ### Muestreo adaptativo
 
