@@ -87,7 +87,12 @@ def face_gating_enabled():
     value = os.environ.get("FACE_GATING", "").strip()
     if value not in ("", "0", "1"):
         raise SystemExit(f"FACE_GATING debe ser 0 o 1, no {value!r}")
-    return value != "0"
+    enabled = value != "0"
+    adaptive = os.environ.get("FACE_ADAPTIVE", "").strip() == "1"
+    if enabled and adaptive and PIPELINE_MODE == "faces":
+        raise SystemExit("FACE_ADAPTIVE=1 no se puede combinar con la compuerta de presencia: "
+                         "use FACE_GATING=0 o FACE_ADAPTIVE=0")
+    return enabled
 
 
 FACE_GATING = face_gating_enabled()

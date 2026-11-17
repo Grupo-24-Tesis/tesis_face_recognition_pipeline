@@ -112,6 +112,28 @@ def sample_video(cap, fps, adaptive, detect, intervals=None):
         yield frame_idx, mode, faces
 
 
+class CountingCapture:
+    def __init__(self, cap):
+        self.cap = cap
+        self.grabbed = 0
+
+    def grab(self):
+        ok = self.cap.grab()
+        if ok:
+            self.grabbed += 1
+        return ok
+
+    def retrieve(self):
+        return self.cap.retrieve()
+
+
+def frame_count_mismatch(presence_total, frames_read, fps, intervals, step):
+    if not intervals:
+        return False
+    reachable = min(presence_total, intervals[-1][1] + 1)
+    return reachable - frames_read > max(round(fps), step)
+
+
 def detections_record(fps, step, frames_analysed, detections, presence=None):
     record = {
         "fps": fps,
@@ -124,6 +146,9 @@ def detections_record(fps, step, frames_analysed, detections, presence=None):
     if presence is not None:
         record["intervals"] = [list(interval) for interval in presence["intervals"]]
         record["active_fraction"] = presence["active_fraction"]
+        for key, name in (("total_frames", "presence_total_frames"), ("frames_read", "frames_read")):
+            if key in presence:
+                record[name] = presence[key]
     return record
 
 

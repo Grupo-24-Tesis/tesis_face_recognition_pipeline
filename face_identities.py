@@ -3,6 +3,7 @@ import ctypes
 import glob
 import json
 import os
+import sys
 import sysconfig
 import time
 
@@ -20,8 +21,9 @@ from retinaface import RetinaFace
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
 from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
-from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, base_step, detections_record,
-                           frame_repeats, read_frames, sample_video, sampling_steps)
+from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, CountingCapture, base_step,
+                           detections_record, frame_count_mismatch, frame_repeats, read_frames,
+                           sample_video, sampling_steps)
 from identity_linking import env_flag, link_identities
 from presence_intervals import format_time
 
@@ -112,13 +114,15 @@ def load_presence(path, fps):
             presence = json.load(f)
         intervals = [(int(start), int(end)) for start, end in presence["intervals"]]
         active_fraction = float(presence["active_fraction"])
+        total_frames = int(presence["total_frames"])
         presence_fps = float(presence["fps"])
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise SystemExit(f"No se pudo leer el archivo de presencia {path}: {exc}")
     if abs(presence_fps - fps) > 1e-3:
         raise SystemExit(f"El archivo de presencia {path} es de un video con {presence_fps} "
                          f"fotogramas por segundo y este tiene {fps}")
-    return {"intervals": intervals, "active_fraction": active_fraction}
+    return {"intervals": intervals, "active_fraction": active_fraction,
+            "total_frames": total_frames}
 
 
 def analyse_video(cap, fps, intervals=None):
@@ -267,11 +271,19 @@ def main():
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
     presence = load_presence(args.presence, fps) if gating else None
+    counted = CountingCapture(cap)
     try:
         detections, sampled, steps = analyse_video(
-            cap, fps, presence["intervals"] if presence else None)
+            counted, fps, presence["intervals"] if presence else None)
     finally:
         cap.release()
+    if presence:
+        presence["frames_read"] = counted.grabbed
+        if frame_count_mismatch(presence["total_frames"], counted.grabbed, fps,
+                                presence["intervals"], base_step(steps)):
+            print(f"Advertencia: presence.json cuenta {presence['total_frames']} fotogramas y "
+                  f"el video solo entregó {counted.grabbed}: puede ser el archivo de otro video "
+                  f"o un video distinto", file=sys.stderr)
 
     identities = link_identities(detections, by_time=ADAPTIVE)
     os.makedirs(args.faces_dir, exist_ok=True)
