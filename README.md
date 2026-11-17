@@ -606,6 +606,7 @@ Formato de `presence.json`:
 | `check_step` | Fotogramas entre dos revisiones |
 | `settings` | Los valores de `GATE_*` con que se corrió |
 | `checks` | Lista de `[fotograma, hay_persona]` en orden |
+| `confidences` | Lista de `[fotograma, confianza]` alineada con `checks`: la mayor confianza de persona que devolvió YOLO en esa revisión (0 si no hubo ninguna) |
 | `intervals` | Lista de `[inicio, fin]` de fotogramas, inclusivos, ordenados y sin solaparse |
 | `switches` | Registro de cambios (abajo) |
 | `active_frames`, `active_fraction` | Fotogramas en tramos activos y su fracción del video |

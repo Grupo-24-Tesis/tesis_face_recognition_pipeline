@@ -34,8 +34,9 @@ def check_step(fps):
     return max(1, round(fps / CHECKS_PER_S))
 
 
-def read_checks(cap, step, person_present):
+def read_checks(cap, step, person_confidence):
     checks = []
+    confidences = []
     frame_idx = -1
     while cap.grab():
         frame_idx += 1
@@ -46,12 +47,17 @@ def read_checks(cap, step, person_present):
             print(f"No se pudo leer el fotograma {frame_idx}: se cuenta como presencia y se "
                   f"sigue", file=sys.stderr)
             checks.append([frame_idx, True])
+            confidences.append([frame_idx, 1.0])
             continue
-        checks.append([frame_idx, bool(person_present(frame))])
-    return checks, frame_idx + 1
+        confidence = float(person_confidence(frame))
+        checks.append([frame_idx, confidence > 0])
+        confidences.append([frame_idx, confidence])
+    return checks, confidences, frame_idx + 1
 
 
-def build_document(video, fps, step, checks, frames_read, wall_s):
+def build_document(video, fps, step, checks, frames_read, wall_s, confidences=None):
+    if confidences is None:
+        confidences = [[frame, 1.0 if found else 0.0] for frame, found in checks]
     total_frames = frames_read
     intervals = active_intervals(checks, fps, total_frames, REWIND_S, EXIT_S)
     active_frames = sum(end - start + 1 for start, end in intervals)
@@ -62,6 +68,7 @@ def build_document(video, fps, step, checks, frames_read, wall_s):
         "check_step": step,
         "settings": settings(),
         "checks": checks,
+        "confidences": confidences,
         "intervals": [list(interval) for interval in intervals],
         "switches": switch_log(intervals, checks, fps, total_frames),
         "active_frames": active_frames,
@@ -80,11 +87,13 @@ def load_detector():
     from ultralytics import YOLO
     model = YOLO(YOLO_WEIGHTS)
 
-    def person_present(frame):
+    def person_confidence(frame):
         result = model.predict(source=frame, classes=[PERSON_CLASS], conf=CONF,
                                imgsz=IMGSZ, verbose=False)[0]
-        return len(result.boxes) > 0
-    return person_present
+        if len(result.boxes) == 0:
+            return 0.0
+        return float(result.boxes.conf.max())
+    return person_confidence
 
 
 def parse_args():
@@ -105,13 +114,13 @@ def main():
         raise SystemExit(f"No se pudo abrir el video: {args.video}")
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = check_step(fps)
-    person_present = load_detector()
+    person_confidence = load_detector()
     try:
-        checks, frames_read = read_checks(cap, step, person_present)
+        checks, confidences, frames_read = read_checks(cap, step, person_confidence)
     finally:
         cap.release()
     document = build_document(args.video, fps, step, checks, frames_read,
-                              time.monotonic() - started)
+                              time.monotonic() - started, confidences)
     out_dir = os.path.dirname(os.path.abspath(args.out))
     os.makedirs(out_dir, exist_ok=True)
     with open(args.out, "w") as f:
