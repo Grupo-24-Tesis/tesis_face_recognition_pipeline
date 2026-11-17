@@ -130,6 +130,15 @@ def frame_count_mismatch(presence_total, frames_read, fps, intervals, step):
     return reachable - frames_read > max(round(fps), step)
 
 
+def frame_count_warning(presence, frames_read, fps, step):
+    if not frame_count_mismatch(presence["total_frames"], frames_read, fps,
+                                presence["intervals"], step):
+        return None
+    return (f"Advertencia: presence.json cuenta {presence['total_frames']} fotogramas y "
+            f"el video solo entregó {frames_read}: puede ser el archivo de otro video "
+            f"o un video distinto")
+
+
 def detections_record(fps, step, frames_analysed, detections, presence=None):
     record = {
         "fps": fps,

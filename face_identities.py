@@ -22,10 +22,10 @@ from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_M
                               RESULTS_NAME, crop_face, rank_key, sharpness)
 from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
 from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, CountingCapture, base_step,
-                           detections_record, frame_count_mismatch, frame_repeats, read_frames,
+                           detections_record, frame_count_warning, frame_repeats, read_frames,
                            sample_video, sampling_steps)
 from identity_linking import env_flag, link_identities
-from presence_intervals import format_time
+from presence_intervals import PresenceFileError, format_time, gating_refusal, load_presence
 
 FACES_DIR = os.path.join("database", "faces_identidades")
 RETINA_THRESHOLD = 0.9
@@ -106,23 +106,6 @@ def ranking(face):
     x1, y1, x2, y2 = face["box"]
     return rank_key({"face_px": (x2 - x1) * (y2 - y1),
                      "sharpness": face["sharpness"], "score": face["score"]})
-
-
-def load_presence(path, fps):
-    try:
-        with open(path) as f:
-            presence = json.load(f)
-        intervals = [(int(start), int(end)) for start, end in presence["intervals"]]
-        active_fraction = float(presence["active_fraction"])
-        total_frames = int(presence["total_frames"])
-        presence_fps = float(presence["fps"])
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise SystemExit(f"No se pudo leer el archivo de presencia {path}: {exc}")
-    if abs(presence_fps - fps) > 1e-3:
-        raise SystemExit(f"El archivo de presencia {path} es de un video con {presence_fps} "
-                         f"fotogramas por segundo y este tiene {fps}")
-    return {"intervals": intervals, "active_fraction": active_fraction,
-            "total_frames": total_frames}
 
 
 def analyse_video(cap, fps, intervals=None):
@@ -264,13 +247,17 @@ def analysed_summary(analysed, total_frames, step, presence):
 def main():
     args = parse_args()
     gating = bool(args.presence) and not args.no_gating
-    if gating and ADAPTIVE:
-        raise SystemExit("La compuerta de presencia no se puede usar con FACE_ADAPTIVE=1: "
-                         "use FACE_ADAPTIVE=0 o --no-gating")
+    refusal = gating_refusal(gating, ADAPTIVE)
+    if refusal:
+        raise SystemExit(refusal)
     cap = open_video(args.video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    presence = load_presence(args.presence, fps) if gating else None
+    try:
+        presence = load_presence(args.presence, fps) if gating else None
+    except PresenceFileError as exc:
+        cap.release()
+        raise SystemExit(str(exc))
     counted = CountingCapture(cap)
     try:
         detections, sampled, steps = analyse_video(
@@ -279,11 +266,9 @@ def main():
         cap.release()
     if presence:
         presence["frames_read"] = counted.grabbed
-        if frame_count_mismatch(presence["total_frames"], counted.grabbed, fps,
-                                presence["intervals"], base_step(steps)):
-            print(f"Advertencia: presence.json cuenta {presence['total_frames']} fotogramas y "
-                  f"el video solo entregó {counted.grabbed}: puede ser el archivo de otro video "
-                  f"o un video distinto", file=sys.stderr)
+        warning = frame_count_warning(presence, counted.grabbed, fps, base_step(steps))
+        if warning:
+            print(warning, file=sys.stderr)
 
     identities = link_identities(detections, by_time=ADAPTIVE)
     os.makedirs(args.faces_dir, exist_ok=True)

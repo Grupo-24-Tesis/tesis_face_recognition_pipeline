@@ -1,4 +1,12 @@
-from bisect import bisect_right
+import json
+from bisect import bisect_left, bisect_right
+
+ADAPTIVE_WITH_GATING = ("La compuerta de presencia no se puede usar con FACE_ADAPTIVE=1: "
+                        "use FACE_ADAPTIVE=0 o --no-gating")
+
+
+class PresenceFileError(ValueError):
+    pass
 
 
 def format_time(seconds):
@@ -52,11 +60,40 @@ def frame_in_intervals(frame_idx, intervals):
 
 def next_allowed(frame_idx, step, intervals):
     candidate = -(-max(0, frame_idx) // step) * step
-    for start, end in intervals:
-        if end < candidate:
-            continue
+    position = bisect_left(intervals, candidate, key=lambda interval: interval[1])
+    while position < len(intervals):
+        start, end = intervals[position]
         if candidate < start:
             candidate = -(-start // step) * step
         if candidate <= end:
             return candidate
+        position += 1
     return None
+
+
+def gating_refusal(gating, adaptive):
+    return ADAPTIVE_WITH_GATING if gating and adaptive else None
+
+
+def fps_mismatch(path, presence_fps, fps):
+    if abs(presence_fps - fps) > 1e-3:
+        return (f"El archivo de presencia {path} es de un video con {presence_fps} "
+                f"fotogramas por segundo y este tiene {fps}")
+    return None
+
+
+def load_presence(path, fps):
+    try:
+        with open(path) as f:
+            presence = json.load(f)
+        intervals = [(int(start), int(end)) for start, end in presence["intervals"]]
+        active_fraction = float(presence["active_fraction"])
+        total_frames = int(presence["total_frames"])
+        presence_fps = float(presence["fps"])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise PresenceFileError(f"No se pudo leer el archivo de presencia {path}: {exc}")
+    mismatch = fps_mismatch(path, presence_fps, fps)
+    if mismatch:
+        raise PresenceFileError(mismatch)
+    return {"intervals": intervals, "active_fraction": active_fraction,
+            "total_frames": total_frames}
