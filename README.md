@@ -549,9 +549,12 @@ La mayoría de los videos de vigilancia pasan largos ratos sin nadie en cámara,
 RetinaFace con escalado sobre cada fotograma analizado es la parte cara del modo `faces`.
 La compuerta decide qué tramos del video merecen esa pasada: una revisión barata con
 YOLO26m busca personas unas pocas veces por segundo, y `face_identities.py` solo analiza
-los fotogramas de los tramos donde alguien apareció. Los rostros y las identidades salen
-igual que sin compuerta: los fotogramas analizados son un subconjunto exacto de los que
-se analizarían sin ella.
+los fotogramas de los tramos donde alguien apareció. Los fotogramas analizados son un
+subconjunto exacto de los que se analizarían sin ella, así que las detecciones son un
+subconjunto de las de la corrida sin compuerta. Las detecciones y las identidades son
+iguales a las de esa corrida cuando los tramos omitidos no tienen rostros (los números de
+muestra coinciden y un hueco corto se trata igual en ambas, ver "Agrupación"), y fueron
+iguales en todas las mediciones (ver "Resultados medidos de la compuerta").
 
 Son dos pasadas, dos procesos, porque PyTorch (YOLO) y TensorFlow (RetinaFace) no pueden
 convivir en un proceso en esta máquina. Se comunican por un archivo, `presence.json`:
@@ -615,9 +618,15 @@ Modelo de costo, por hora de video:
   `f * 3600 / FACE_INTERVAL_S` fotogramas con RetinaFace y GhostFaceNet, en lugar de
   `3600 / FACE_INTERVAL_S`. La lectura de los fotogramas omitidos sigue costando un
   `grab()` cada uno.
-- Total: costo de la compuerta más `f` veces el costo de la pasada de rostros sin
-  compuerta. Ahorra mientras `f` sea pequeña y la pasada de la compuerta cueste menos que
-  la pasada de rostros omitida.
+- Costo fijo de la pasada de rostros, que no depende de `f`: cargar los modelos y
+  decodificar el video en orden, una vez con `grab()` hasta el último tramo y otra al
+  escribir los rostros, hasta el último mejor rostro.
+- Total: costo de la compuerta, más el costo fijo de la pasada de rostros, más `f` veces
+  el costo por fotograma de la pasada de rostros sin compuerta. Ahorra mientras `f` sea
+  pequeña y la compuerta más ese costo fijo cuesten menos que la parte omitida de la
+  pasada de rostros. En el video largo, sin el costo fijo la cuenta daría
+  171 + 0.043 x 3645 = 328 s contra 466 s medidos; la diferencia, unos 140 s, es ese
+  costo fijo.
 
 Formato de `presence.json`:
 
@@ -657,12 +666,25 @@ compuerta no.
 
 | Conjunto | Sin compuerta | Con compuerta | Detecciones perdidas | Personas encontradas |
 | --- | --- | --- | --- | --- |
-| Video de 45 min, 4.3 % con personas (ChokePoint unido con tramos vacíos) | 3645 s (factor 1.35) | 468 s (factor 0.17: compuerta 170 s, rostros 298 s) | 0 | 15 de 15 en ambas |
-| 78 videos de ChokePoint (portales 1 y 2, entrando y saliendo, más los de mucha gente) | factor 1.66 en 69 de ellos | factor 1.80 en esos 69, medido con 4 revisiones por segundo | 0 con 4 revisiones por segundo (corrida real) y con 2 (barrido) | iguales |
-| Camera3 y Camera_ch6 (residenciales, 960x480) | factor 1.75 y 1.60 | factor 1.81 y 1.69 | 0 | iguales |
+| Video de 45 min, 4.3 % con personas (ChokePoint unido con tramos vacíos: unos 7.4 s de metraje vacío real repetidos en ida y vuelta, más un fotograma congelado) | 3645 s (factor 1.35) | 466 s (factor 0.17: compuerta 171 s, rostros 295 s) | 0 | 15 de 15 en ambas |
+| 78 videos de ChokePoint (portales 1 y 2, entrando y saliendo, más los de mucha gente) | factor 1.66 en 69 de ellos | factor 1.80 en esos 69, medido con 4 revisiones por segundo | 0 con 4 revisiones por segundo (corrida real, los 78) y 0 con 2 (barrido sobre los 78, solo detecciones) | iguales con 4 revisiones por segundo (corrida real: 1115 en ambas en los 72 videos con etiquetas, 1329 identidades en ambas); con 2 no se midieron en estos videos |
+| Camera3 y Camera_ch6 (residenciales, 960x480) | factor 1.75 y 1.60 | factor 1.82 y 1.68 | 0 | iguales (7 y 2) |
 | Casos borde: persona desde el fotograma 0, hasta el último, menos de 1 s, varias seguidas, quieta 60 s | | | 0 | iguales |
 
-- La compuerta no cambia los rostros ni las identidades en ningún video medido.
+Las corridas reales con el valor por defecto, 2 revisiones por segundo, son el video
+largo, los casos borde y las dos cámaras. Los 78 videos de ChokePoint se corrieron de
+verdad con 4 revisiones por segundo; con 2 solo se simularon sus detecciones en el
+barrido. La exhaustividad con compuerta se mide sobre los fotogramas analizados de la
+corrida sin compuerta, así que una persona etiquetada en un fotograma omitido cuenta como
+no encontrada.
+
+- En todas las mediciones no se perdió ninguna detección y las identidades fueron las
+  mismas que sin compuerta. Eso no es una garantía general: solo vale mientras los tramos
+  omitidos no tengan rostros.
+- La fracción activa y el factor del video largo son el mejor caso: sus tramos vacíos son
+  unos 7.4 s de metraje vacío real repetidos en ida y vuelta durante unos 40 minutos, más
+  un fotograma congelado. Una grabación residencial real, con cambios de luz, paso a
+  infrarrojo, sombras, autos o animales, puede activar la compuerta más seguido.
 - Ahorra en videos mayormente vacíos: el video largo es 7.8 veces más rápido. En clips
   casi siempre ocupados (86 a 100 % activos) cuesta entre 4 y 9 % más, porque se suma la
   pasada de la compuerta y no hay tramos que saltar.
@@ -673,9 +695,14 @@ Barrido de umbrales: las revisiones por segundo y el tamaño de imagen se corrie
 verdad (`GATE_CHECKS_PER_S` 2 y 4, `GATE_IMGSZ` 320 y 640, con confianza mínima 0.05 y la
 confianza de cada revisión guardada). `GATE_CONF` (0.1, 0.25, 0.4) y `GATE_EXIT_S` (1 y
 2) se aplicaron después sobre esos archivos, simulando la pasada de rostros a partir de
-la corrida sin compuerta, lo que es exacto porque los fotogramas analizados con compuerta
-son un subconjunto de los de la corrida sin ella. Los umbrales se eligieron con el portal 1
-y se confirmaron con el portal 2 y las dos cámaras residenciales:
+la corrida sin compuerta, lo que es exacto para las detecciones porque los fotogramas
+analizados con compuerta son un subconjunto de los de la corrida sin ella. Los tiempos del
+barrido son estimaciones optimistas, porque no modelan la decodificación de los
+fotogramas omitidos: con 4 revisiones por segundo estimó 432 s para el video largo contra
+552 s medidos. Ese costo es el mismo para todos los ajustes, así que el orden entre ellos
+casi no cambia. El barrido cubre 81 videos: los 78 de ChokePoint, el video largo y las
+dos cámaras. Los umbrales se eligieron con el portal 1 y se confirmaron con el portal 2 y
+las dos cámaras residenciales:
 
 - Con `GATE_IMGSZ` 640 ninguna combinación pierde una detección.
 - Con `GATE_IMGSZ` 320, YOLO no ve a las personas pequeñas y lejanas de Camera_ch6: con
