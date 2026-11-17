@@ -111,7 +111,8 @@ la carga de TensorFlow y de los pesos.
 | `face_embedding.py` | Modo `faces`: preprocesamiento de GhostFaceNet y embeddings en bloque (numpy y OpenCV) |
 | `face_sampling.py` | Modo `faces`: elección del siguiente fotograma a analizar (intervalo fijo, o adaptativo con `FACE_ADAPTIVE=1`, y tramos de la compuerta; sin dependencias externas) |
 | `presence_gate.py` | Modo `faces`, compuerta de presencia: revisa el video con YOLO26m y escribe `presence.json` con los tramos donde hay alguien en cámara |
-| `presence_intervals.py` | Modo `faces`: cálculo de los tramos activos y del registro de cambios (solo biblioteca estándar, lo importan todos los venvs) |
+| `presence_intervals.py` | Modo `faces`: cálculo de los tramos activos y del registro de cambios, lectura de `presence.json`, las decisiones de la compuerta y la validación de `GATE_*` (solo biblioteca estándar, lo importan todos los venvs, el worker incluido) |
+| `env_settings.py` | Lectura y validación de las variables de entorno numéricas y de 0 o 1 (solo biblioteca estándar) |
 | `identity_linking.py` | Modo `faces`: agrupación de rostros en identidades (solo numpy) |
 | `tracking.py` | Modo `tracks`, etapa 1: seguimiento de personas y recortes candidatos |
 | `face_recognition.py` | Modo `tracks`, etapa 2: mejor rostro por persona |
@@ -279,7 +280,7 @@ consulta SQS sin parar. Variables:
 | `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
 | `FACE_ADAPTIVE` | `0` | Solo en el modo `faces`: `0` intervalo fijo `FACE_INTERVAL_S`, `1` muestreo adaptativo |
 | `FACE_GATING` | `1` | Solo en el modo `faces`: `1` corre antes la compuerta de presencia y analiza solo los tramos con alguien en cámara; `0` analiza todo el video. Con otro valor el worker no arranca. Ver "Compuerta de presencia" |
-| `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF`, `GATE_IMGSZ` | `2`, `1.0`, `2.0`, `0.25`, `640` | Ajustes de la compuerta (ver "Compuerta de presencia"); el worker se los pasa tal cual a `presence_gate.py` |
+| `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF`, `GATE_IMGSZ` | `2`, `1.0`, `2.0`, `0.25`, `640` | Ajustes de la compuerta (ver "Compuerta de presencia"); el worker los valida al arrancar y se los pasa tal cual a `presence_gate.py`. Con un valor no válido el worker no arranca |
 | `FACE_MIN_FACES` | `8` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: rostros mínimos para conservar una identidad. Entero positivo |
 | `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: segundos de video entre fotogramas analizados. Número positivo |
 | Otras `FACE_*` | | Las demás variables del modo `faces` (`FACE_EMBED_BATCH`, `FACE_DETECT_UPSCALE`, los intervalos y umbrales del muestreo adaptativo y la presencia mínima): ver la sección del modo `faces` |
@@ -569,8 +570,9 @@ convivir en un proceso en esta máquina. Se comunican por un archivo, `presence.
    vuelve atrás en el video.
 
 Variables de la compuerta (las lee `presence_gate.py`; vacías usan el valor por defecto
-y un valor no válido detiene el script con un mensaje). Los valores por defecto salen del
-barrido de umbrales descrito en "Resultados medidos de la compuerta":
+y un valor no válido detiene el script con un mensaje y también el arranque del
+worker). Los valores por defecto salen del barrido de umbrales descrito en "Resultados
+medidos de la compuerta":
 
 | Variable | Valor por defecto | Valores válidos | Para qué |
 | --- | --- | --- | --- |
@@ -586,6 +588,20 @@ detiene con un error y el worker no arranca si tiene `FACE_ADAPTIVE=1` y `FACE_G
 en el modo `faces`. Para ignorar el archivo de presencia en `face_identities.py` está
 `--no-gating`, y en `run.sh` la misma opción omite la compuerta. En el worker se desactiva
 con `FACE_GATING=0`.
+
+El worker valida `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF` y
+`GATE_IMGSZ` al arrancar en el modo `faces` con `FACE_GATING=1`, con las mismas reglas y
+mensajes que `presence_gate.py` (el código es el mismo, `read_gate_settings` de
+`presence_intervals.py`, que no importa torch, cv2 ni ultralytics), y no arranca si alguna
+no es válida. Así un valor erróneo en `.env` no hace fallar cada trabajo `MAX_ATTEMPTS`
+veces.
+
+Si la pasada de la compuerta falla, el trabajo falla como con cualquier otra etapa: se
+reintenta hasta `MAX_ATTEMPTS` veces y después se publica `VIDEO_PROCESSING_FAILED`. No
+hay respaldo que corra la pasada de rostros sin compuerta, a propósito: ese respaldo
+ocultaría un `venvs/track` roto (sin CUDA, sin `yolo26m.pt`, con dependencias dañadas) y
+duplicaría en silencio el costo de cada trabajo, porque todos pasarían a analizar el
+video completo sin que nadie lo notara.
 
 Modelo de costo, por hora de video:
 

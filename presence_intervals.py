@@ -1,12 +1,26 @@
 import json
 from bisect import bisect_left, bisect_right
 
+from env_settings import env_non_negative_float, env_positive_float, env_positive_int
+
 ADAPTIVE_WITH_GATING = ("La compuerta de presencia no se puede usar con FACE_ADAPTIVE=1: "
                         "use FACE_ADAPTIVE=0 o --no-gating")
 
 
 class PresenceFileError(ValueError):
     pass
+
+
+def read_gate_settings():
+    checks_per_s = env_positive_float("GATE_CHECKS_PER_S", 2.0)
+    rewind_s = env_non_negative_float("GATE_REWIND_S", 1.0)
+    exit_s = env_non_negative_float("GATE_EXIT_S", 2.0)
+    conf = env_positive_float("GATE_CONF", 0.25)
+    if conf > 1:
+        raise SystemExit(f"GATE_CONF debe estar entre 0 y 1, no {conf!r}")
+    imgsz = env_positive_int("GATE_IMGSZ", 640)
+    return {"checks_per_s": checks_per_s, "rewind_s": rewind_s, "exit_s": exit_s,
+            "conf": conf, "imgsz": imgsz}
 
 
 def format_time(seconds):

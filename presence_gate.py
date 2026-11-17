@@ -4,25 +4,16 @@ import os
 import sys
 import time
 
-from identity_linking import env_non_negative_float, env_positive_float, env_positive_int
-from presence_intervals import active_intervals, format_time, switch_log
+from presence_intervals import active_intervals, format_time, read_gate_settings, switch_log
 
 YOLO_WEIGHTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "yolo26m.pt")
 PERSON_CLASS = 0
-CHECKS_PER_S = env_positive_float("GATE_CHECKS_PER_S", 2.0)
-REWIND_S = env_non_negative_float("GATE_REWIND_S", 1.0)
-EXIT_S = env_non_negative_float("GATE_EXIT_S", 2.0)
-
-
-def gate_conf():
-    value = env_positive_float("GATE_CONF", 0.25)
-    if value > 1:
-        raise SystemExit(f"GATE_CONF debe estar entre 0 y 1, no {value!r}")
-    return value
-
-
-CONF = gate_conf()
-IMGSZ = env_positive_int("GATE_IMGSZ", 640)
+GATE_SETTINGS = read_gate_settings()
+CHECKS_PER_S = GATE_SETTINGS["checks_per_s"]
+REWIND_S = GATE_SETTINGS["rewind_s"]
+EXIT_S = GATE_SETTINGS["exit_s"]
+CONF = GATE_SETTINGS["conf"]
+IMGSZ = GATE_SETTINGS["imgsz"]
 
 
 def settings():

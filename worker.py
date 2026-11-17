@@ -12,6 +12,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from presence_intervals import read_gate_settings
+
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 TRACK_PYTHON = os.path.join(REPO_DIR, "venvs", "track", "bin", "python")
 FACES_PYTHON = os.path.join(REPO_DIR, "venvs", "faces", "bin", "python")
@@ -88,10 +90,12 @@ def face_gating_enabled():
     if value not in ("", "0", "1"):
         raise SystemExit(f"FACE_GATING debe ser 0 o 1, no {value!r}")
     enabled = value != "0"
-    adaptive = os.environ.get("FACE_ADAPTIVE", "").strip() == "1"
-    if enabled and adaptive and PIPELINE_MODE == "faces":
+    if not enabled or PIPELINE_MODE != "faces":
+        return enabled
+    if os.environ.get("FACE_ADAPTIVE", "").strip() == "1":
         raise SystemExit("FACE_ADAPTIVE=1 no se puede combinar con la compuerta de presencia: "
                          "use FACE_GATING=0 o FACE_ADAPTIVE=0")
+    read_gate_settings()
     return enabled
 
 
