@@ -109,7 +109,9 @@ la carga de TensorFlow y de los pesos.
 | --- | --- |
 | `face_identities.py` | Modo `faces`: detecta, alinea y agrupa los rostros del video y guarda el mejor de cada identidad |
 | `face_embedding.py` | Modo `faces`: preprocesamiento de GhostFaceNet y embeddings en bloque (numpy y OpenCV) |
-| `face_sampling.py` | Modo `faces`: elección del siguiente fotograma a analizar (muestreo adaptativo, sin dependencias externas) |
+| `face_sampling.py` | Modo `faces`: elección del siguiente fotograma a analizar (intervalo fijo, o adaptativo con `FACE_ADAPTIVE=1`, y tramos de la compuerta; sin dependencias externas) |
+| `presence_gate.py` | Modo `faces`, compuerta de presencia: revisa el video con YOLO26m y escribe `presence.json` con los tramos donde hay alguien en cámara |
+| `presence_intervals.py` | Modo `faces`: cálculo de los tramos activos y del registro de cambios (solo biblioteca estándar, lo importan todos los venvs) |
 | `identity_linking.py` | Modo `faces`: agrupación de rostros en identidades (solo numpy) |
 | `tracking.py` | Modo `tracks`, etapa 1: seguimiento de personas y recortes candidatos |
 | `face_recognition.py` | Modo `tracks`, etapa 2: mejor rostro por persona |
@@ -276,6 +278,8 @@ consulta SQS sin parar. Variables:
 | --- | --- | --- |
 | `PIPELINE_MODE` | `faces` | Modo del pipeline: `faces` (identidad por rostro) o `tracks` (identidad por track del cuerpo). Vacía equivale a `faces`. Con otro valor el worker no arranca |
 | `FACE_ADAPTIVE` | `0` | Solo en el modo `faces`: `0` intervalo fijo `FACE_INTERVAL_S`, `1` muestreo adaptativo |
+| `FACE_GATING` | `1` | Solo en el modo `faces`: `1` corre antes la compuerta de presencia y analiza solo los tramos con alguien en cámara; `0` analiza todo el video. Con otro valor el worker no arranca. Ver "Compuerta de presencia" |
+| `GATE_CHECKS_PER_S`, `GATE_REWIND_S`, `GATE_EXIT_S`, `GATE_CONF`, `GATE_IMGSZ` | `4`, `1.0`, `2.0`, `0.25`, `640` | Ajustes de la compuerta (ver "Compuerta de presencia"); el worker se los pasa tal cual a `presence_gate.py` |
 | `FACE_MIN_FACES` | `8` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: rostros mínimos para conservar una identidad. Entero positivo |
 | `FACE_INTERVAL_S` | `0.1` | Solo en el modo `faces` con `FACE_ADAPTIVE=0`: segundos de video entre fotogramas analizados. Número positivo |
 | Otras `FACE_*` | | Las demás variables del modo `faces` (`FACE_EMBED_BATCH`, `FACE_DETECT_UPSCALE`, los intervalos y umbrales del muestreo adaptativo y la presencia mínima): ver la sección del modo `faces` |
@@ -305,7 +309,9 @@ Flujo por mensaje `VIDEO_UPLOAD_READY` (lo publica `SqsVideoJobPublisher` del ba
 
 1. Publica `VIDEO_PROCESSING_STARTED` en la cola de resultados.
 2. Descarga `s3://<bucket>/<objectKey>` en `database/jobs/<jobId>/`.
-3. En el modo `faces` corre `face_identities.py` (venvs/faces). En el modo `tracks` corre
+3. En el modo `faces` con `FACE_GATING=1` (por defecto) corre `presence_gate.py`
+   (venvs/track) y después `face_identities.py --presence` (venvs/faces); con
+   `FACE_GATING=0` corre solo `face_identities.py`. En el modo `tracks` corre
    `tracking.py` (venvs/track) y `face_recognition.py` (venvs/faces).
 4. Sube cada rostro a `s3://<bucket>/<FACES_S3_PREFIX>/<jobId>/<trackId>.jpg`.
 5. Publica `VIDEO_PROCESSING_COMPLETED` con los rostros y borra el mensaje de la cola de
@@ -375,7 +381,8 @@ Manejo de fallos:
 python3 worker.py --local /ruta/al/video.mp4 --job-id prueba
 ```
 
-Corre el modo de `PIPELINE_MODE` igual que en producción e imprime el payload. `frameUrl` es la ruta
+Corre el modo de `PIPELINE_MODE` igual que en producción (incluida la compuerta de
+presencia según `FACE_GATING`) e imprime el payload. `frameUrl` es la ruta
 local del rostro. Los archivos quedan en `database/jobs/prueba/`.
 
 ### Etapas a mano
@@ -383,11 +390,13 @@ local del rostro. Los archivos quedan en `database/jobs/prueba/`.
 Modo `faces`:
 
 ```bash
-venvs/faces/bin/python face_identities.py --video /ruta/al/video.mp4 --faces-dir database/faces_identidades
+venvs/track/bin/python presence_gate.py --video /ruta/al/video.mp4 --out database/presence.json
+venvs/faces/bin/python face_identities.py --video /ruta/al/video.mp4 --faces-dir database/faces_identidades --presence database/presence.json
 ```
 
 `--video` es obligatorio; sin `--faces-dir` se usa `database/faces_identidades`.
-`--annotated-video` es opcional.
+`--annotated-video` es opcional. La primera línea es la compuerta de presencia; sin
+`--presence` (o con `--no-gating`) `face_identities.py` analiza todo el video.
 
 Modo `tracks`:
 
@@ -407,7 +416,7 @@ de su venv es lo que garantiza que corra sobre el stack correcto.
 ### El pipeline con video anotado (`run.sh`)
 
 ```bash
-./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
+./run.sh [--no-gating] /ruta/al/video.mp4 [carpeta_de_salida]
 PIPELINE_MODE=tracks ./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
 ```
 
@@ -415,9 +424,13 @@ PIPELINE_MODE=tracks ./run.sh /ruta/al/video.mp4 [carpeta_de_salida]
 un error si tiene otro valor. La salida va a `database/run/<nombre del video>/` si no se
 indica otra carpeta.
 
-En el modo `faces` corre `face_identities.py` y escribe `faces/` e `identities.mp4`, el
-video de los fotogramas analizados con cada rostro conservado en una caja con su
-`ID <n>`. Cada ejecución borra antes `faces/` de esa carpeta.
+En el modo `faces` corre `presence_gate.py` (escribe `presence.json`) y después
+`face_identities.py` con `--presence`; con `--no-gating` omite la compuerta y analiza todo
+el video. Escribe `faces/` e `identities.mp4`, el video de los fotogramas analizados con
+cada rostro conservado en una caja con su `ID <n>`; con la compuerta solo trae los
+fotogramas analizados de los tramos activos, cada uno con su tiempo de origen
+(`HH:MM:SS.s`). Cada ejecución borra antes `faces/` de esa carpeta. `--no-gating` no
+tiene efecto en el modo `tracks`.
 
 En el modo `tracks` corre `tracking.py` y `face_recognition.py` con la configuración vigente, igual que el
 worker, y además escribe `tracked.mp4` con las cajas y los IDs del tracker para
@@ -432,10 +445,12 @@ revisarlos. La salida va a `database/run/<nombre del video>/` (`candidates/`, `f
 Corre en `venvs/faces`, en un solo proceso, y no usa el tracker del cuerpo. Busca todos
 los rostros del video y los agrupa en identidades con sus embeddings:
 
-1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`). Con
-   `FACE_ADAPTIVE=1` `face_sampling.py` elige tras cada fotograma analizado
-   cuánto avanzar hasta el siguiente (ver "Muestreo adaptativo"); con `FACE_ADAPTIVE=0`
-   (por defecto) analiza un fotograma cada `FACE_INTERVAL_S` segundos.
+1. Lee el video con `cv2.VideoCapture` (`grab` y `retrieve`, como `tracking.py`).
+   `face_sampling.py` elige qué fotogramas analizar. Con `FACE_ADAPTIVE=0` (por defecto)
+   analiza un fotograma cada `FACE_INTERVAL_S` segundos. Con `FACE_ADAPTIVE=1` elige tras
+   cada fotograma analizado cuánto avanzar hasta el siguiente (ver "Muestreo adaptativo").
+   Si recibe un `presence.json` (ver "Compuerta de presencia"), analiza solo los
+   fotogramas de ese intervalo fijo que caen dentro de los tramos activos.
 2. Corre RetinaFace sobre el fotograma completo, con escalado (`allow_upscaling`) si
    `FACE_DETECT_UPSCALE=1`.
 3. Alinea cada rostro con sus cinco puntos a la plantilla de ArcFace de 112x112 px.
@@ -463,7 +478,9 @@ Agrupación (`identity_linking.py`, solo numpy):
    voraz por IoU más similitud, de mayor a menor, con un rostro por tracklet y por
    fotograma. Un tracklet puede saltarse hasta `MAX_SKIP` fotogramas analizados; se
    cuentan fotogramas analizados y no fotogramas del video, porque con el muestreo
-   adaptativo el paso cambia.
+   adaptativo el paso cambia. Con la compuerta, el contador de fotogramas analizados salta
+   al cruzar un tramo omitido de modo que la diferencia supera siempre `MAX_SKIP + 1`:
+   un tracklet nunca une rostros de dos tramos separados.
 3. Fusión: agrupamiento jerárquico con enlace promedio (ponderado por el tamaño de cada
    tracklet) de los embeddings medios de los tracklets, hasta `MERGE_THRESHOLD`. Dos
    grupos que comparten un fotograma analizado nunca se fusionan: una persona no aparece
@@ -508,7 +525,7 @@ por defecto; con un valor no válido el script se detiene con un mensaje:
 | --- | --- | --- | --- |
 | `FACE_EMBED_BATCH` | `1` | `0` o `1` | `1` calcula los embeddings en bloques; `0` vuelve a una llamada de DeepFace por rostro |
 | `FACE_DETECT_UPSCALE` | `1` | `0` o `1` | `allow_upscaling` de RetinaFace. `0` es más rápido y puede perder rostros pequeños |
-| `FACE_ADAPTIVE` | `0` | `0` o `1` | `0` intervalo fijo `FACE_INTERVAL_S` y regla `FACE_MIN_FACES`; `1` muestreo adaptativo, que en la evaluación perdió 7 de 78 personas |
+| `FACE_ADAPTIVE` | `0` | `0` o `1` | `0` (por defecto) intervalo fijo `FACE_INTERVAL_S` y regla `FACE_MIN_FACES`; `1` muestreo adaptativo, que en la evaluación perdió 7 de 78 personas. No se puede combinar con la compuerta de presencia |
 | `FACE_INTERVAL_DENSE_S` | `0.1` | Número positivo, en segundos | Intervalo denso del muestreo adaptativo |
 | `FACE_INTERVAL_SPARSE_S` | `0.3` | Número positivo, en segundos | Intervalo disperso del muestreo adaptativo |
 | `FACE_INTERVAL_IDLE_S` | `1.0` | Número positivo, en segundos | Intervalo sin rostros del muestreo adaptativo |
@@ -520,7 +537,92 @@ por defecto; con un valor no válido el script se detiene con un mensaje:
 | `FACE_MIN_FACES` | `8` | Entero positivo | Con `FACE_ADAPTIVE=0`. En cámaras de baja resolución 5 encuentra algunas personas más |
 | `FACE_INTERVAL_S` | `0.1` | Número positivo, en segundos | Con `FACE_ADAPTIVE=0`. Acelerar videos largos analizando menos fotogramas |
 
+### Compuerta de presencia (`presence_gate.py`)
+
+La mayoría de los videos de vigilancia pasan largos ratos sin nadie en cámara, y
+RetinaFace con escalado sobre cada fotograma analizado es la parte cara del modo `faces`.
+La compuerta decide qué tramos del video merecen esa pasada: una revisión barata con
+YOLO26m busca personas unas pocas veces por segundo, y `face_identities.py` solo analiza
+los fotogramas de los tramos donde alguien apareció. Los rostros y las identidades salen
+igual que sin compuerta: los fotogramas analizados son un subconjunto exacto de los que
+se analizarían sin ella.
+
+Son dos pasadas, dos procesos, porque PyTorch (YOLO) y TensorFlow (RetinaFace) no pueden
+convivir en un proceso en esta máquina. Se comunican por un archivo, `presence.json`:
+
+1. `presence_gate.py` (`venvs/track`) lee el video en orden con `grab()`, recupera
+   (`retrieve()`) un fotograma cada `max(1, round(fps / GATE_CHECKS_PER_S))` empezando por
+   el 0, y corre `YOLO(yolo26m.pt)` solo con la clase persona. Hay presencia si detecta al
+   menos una caja.
+2. Cada fotograma con persona abre o amplía un tramo activo que cubre desde
+   `GATE_REWIND_S` segundos antes hasta `GATE_EXIT_S` segundos después. Los tramos que se
+   solapan o se tocan se unen, y se recortan a los límites del video.
+3. `face_identities.py --presence presence.json` mantiene la misma rejilla de
+   fotogramas, anclada en el fotograma 0 (un fotograma cada `FACE_INTERVAL_S`), y analiza
+   solo los que caen dentro de un tramo. Los fotogramas fuera de los tramos solo se
+   avanzan con `grab()`: no se decodifican a imagen, no se guardan en memoria ni se
+   vuelve atrás en el video.
+
+Variables de la compuerta (las lee `presence_gate.py`; vacías usan el valor por defecto
+y un valor no válido detiene el script con un mensaje). Los valores por defecto son
+provisionales, hasta que se mida su efecto:
+
+| Variable | Valor por defecto | Valores válidos | Para qué |
+| --- | --- | --- | --- |
+| `FACE_GATING` | `1` | `0` o `1` | La lee el worker. `1` corre la compuerta antes de `face_identities.py`; `0` analiza todo el video, como antes |
+| `GATE_CHECKS_PER_S` | `4` | Número positivo | Revisiones de YOLO por segundo de video |
+| `GATE_REWIND_S` | `1.0` | Número positivo, en segundos | Cuánto antes de la detección empieza el tramo, para no perder a quien YOLO ve tarde |
+| `GATE_EXIT_S` | `2.0` | Número positivo, en segundos | Cuánto después de la última detección sigue activo el tramo |
+| `GATE_CONF` | `0.25` | Número positivo | Confianza mínima de YOLO para contar una persona |
+| `GATE_IMGSZ` | `640` | Entero positivo | Tamaño de imagen de YOLO |
+
+Con `FACE_ADAPTIVE=1` la compuerta no se admite: `face_identities.py --presence` se
+detiene con un error. Para ignorar el archivo de presencia en `face_identities.py` está
+`--no-gating`, y en `run.sh` la misma opción omite la compuerta. En el worker se desactiva
+con `FACE_GATING=0`.
+
+Modelo de costo, por hora de video:
+
+- Pasada de la compuerta: la lectura secuencial de todos los fotogramas más
+  `3600 * GATE_CHECKS_PER_S` inferencias de YOLO. Es un costo fijo que no depende de
+  cuánta gente aparece.
+- Pasada de rostros: solo sobre el tiempo activo. Con fracción activa `f`, analiza
+  `f * 3600 / FACE_INTERVAL_S` fotogramas con RetinaFace y GhostFaceNet, en lugar de
+  `3600 / FACE_INTERVAL_S`. La lectura de los fotogramas omitidos sigue costando un
+  `grab()` cada uno.
+- Total: costo de la compuerta más `f` veces el costo de la pasada de rostros sin
+  compuerta. Ahorra mientras `f` sea pequeña y la pasada de la compuerta cueste menos que
+  la pasada de rostros omitida.
+
+Formato de `presence.json`:
+
+| Campo | Contenido |
+| --- | --- |
+| `video` | Nombre del archivo de video |
+| `fps`, `total_frames` | Fotogramas por segundo y fotogramas del video (si el contenedor no declara la cantidad, los leídos) |
+| `check_step` | Fotogramas entre dos revisiones |
+| `settings` | Los valores de `GATE_*` con que se corrió |
+| `checks` | Lista de `[fotograma, hay_persona]` en orden |
+| `intervals` | Lista de `[inicio, fin]` de fotogramas, inclusivos, ordenados y sin solaparse |
+| `switches` | Registro de cambios (abajo) |
+| `active_frames`, `active_fraction` | Fotogramas en tramos activos y su fracción del video |
+| `wall_s` | Segundos que tardó la compuerta |
+
+Cada elemento de `switches` es `{"evento": "activo" o "inactivo", "frame", "tiempo",
+"disparo_frame", "disparo_tiempo"}` con los tiempos en `HH:MM:SS.s`. Un `activo` marca el
+inicio de un tramo y su disparo es la primera persona que lo abrió; un `inactivo` marca el
+fotograma siguiente al fin del tramo y su disparo es la última persona vista en él (no
+aparece si el tramo llega al último fotograma). `presence_gate.py` imprime cada cambio,
+por ejemplo `activo desde 00:01:02.3 (persona a las 00:01:03.3)`, y una línea de
+resumen con las revisiones, la fracción activa y el tiempo.
+
+`face_identities.py` escribe `"gating": true|false` en `detections.json` y en
+`identities.json`; con la compuerta agrega `intervals` y `active_fraction`, y en su
+resumen imprime la fracción de fotogramas analizados.
+
 ### Muestreo adaptativo
+
+Es el modo alternativo, no el predeterminado (se activa con `FACE_ADAPTIVE=1`).
 
 Tras cada fotograma analizado, `face_sampling.py` elige el modo según lo que encontró, y
 el modo da el intervalo hasta el siguiente fotograma (paso en fotogramas
