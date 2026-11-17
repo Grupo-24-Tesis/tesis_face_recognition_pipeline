@@ -1,7 +1,6 @@
 import math
 
-from identity_linking import (LINK_IOU, MAX_SKIP, env_flag, env_positive_float,
-                              env_positive_int, iou)
+from identity_linking import LINK_IOU, env_flag, env_positive_float, env_positive_int, iou
 from presence_intervals import next_allowed
 
 FIXED = "fixed"
@@ -97,18 +96,15 @@ def sample_video(cap, fps, adaptive, detect, intervals=None):
 
         def next_target(idx):
             return next_allowed(idx + step, step, intervals)
-    sample = 0
-    previous = None
+    analysed = 0
     for frame_idx, frame in read_frames(cap, first, next_target):
-        if intervals is not None and previous is not None and frame_idx - previous != step:
-            sample += MAX_SKIP + 1
-        previous = frame_idx
+        sample = analysed if adaptive else frame_idx // steps[FIXED]
         mode = state["mode"]
         faces = detect(frame_idx, frame, sample)
         state = advance(state, [face["box"] for face in faces], frame_idx, hold)
         for face in faces:
             face["interval_s"] = steps[state["mode"]] / fps
-        sample += 1
+        analysed += 1
         yield frame_idx, mode, faces
 
 

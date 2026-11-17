@@ -478,9 +478,12 @@ Agrupación (`identity_linking.py`, solo numpy):
    voraz por IoU más similitud, de mayor a menor, con un rostro por tracklet y por
    fotograma. Un tracklet puede saltarse hasta `MAX_SKIP` fotogramas analizados; se
    cuentan fotogramas analizados y no fotogramas del video, porque con el muestreo
-   adaptativo el paso cambia. Con la compuerta, el contador de fotogramas analizados salta
-   al cruzar un tramo omitido de modo que la diferencia supera siempre `MAX_SKIP + 1`:
-   un tracklet nunca une rostros de dos tramos separados.
+   adaptativo el paso cambia. Con el intervalo fijo, el número de muestra de cada
+   fotograma analizado es su índice en la rejilla (`fotograma // paso`), con compuerta o
+   sin ella, así que ambas corridas numeran igual los mismos fotogramas. Un tramo omitido
+   por la compuerta de hasta `MAX_SKIP` fotogramas de la rejilla se comporta igual que
+   esos fotogramas analizados sin rostros en la corrida sin compuerta; uno más largo corta
+   el tracklet.
 3. Fusión: agrupamiento jerárquico con enlace promedio (ponderado por el tamaño de cada
    tracklet) de los embeddings medios de los tracklets, hasta `MERGE_THRESHOLD`. Dos
    grupos que comparten un fotograma analizado nunca se fusionan: una persona no aparece
