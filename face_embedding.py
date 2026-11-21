@@ -1,3 +1,5 @@
+import base64
+
 import cv2
 import numpy as np
 
@@ -7,6 +9,22 @@ EMBED_CHUNK = 64
 def unit_embedding(values):
     emb = np.array(values, dtype=np.float32)
     return emb / (np.linalg.norm(emb) + 1e-9)
+
+
+def identity_embedding(faces):
+    return unit_embedding(np.sum([face["embedding"] for face in faces], axis=0))
+
+
+def encode_embedding(embedding):
+    return base64.b64encode(np.asarray(embedding, dtype="<f4").tobytes()).decode()
+
+
+def embeddings_record(model, identities, saved_ids):
+    embeddings = {str(identity_id): encode_embedding(identity_embedding(faces))
+                  for identity_id, faces in enumerate(identities, start=1)
+                  if identity_id in saved_ids}
+    dimensions = next((len(face["embedding"]) for faces in identities for face in faces), 0)
+    return {"model": model, "dimensions": dimensions, "embeddings": embeddings}
 
 
 def model_input(face, input_shape):

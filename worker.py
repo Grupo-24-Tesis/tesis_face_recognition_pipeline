@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,8 @@ EVENT_COMPLETED = "VIDEO_PROCESSING_COMPLETED"
 EVENT_FAILED = "VIDEO_PROCESSING_FAILED"
 EVENT_VERSION = "1"
 MAX_EVENT_BYTES = 256 * 1024
+PART_BYTES = 240 * 1024
+PART_ENVELOPE_MARGIN = 64
 MAX_REASON_CHARS = 500
 VISIBILITY_TIMEOUT = 300
 HEARTBEAT_EVERY = 120
@@ -140,7 +143,17 @@ def run_pipeline(video_path, job_dir):
         return faces_dir, json.load(f)["faces"]
 
 
-def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url):
+def identity_embeddings(faces_dir):
+    path = os.path.join(faces_dir, "embeddings.json")
+    if not os.path.isfile(path):
+        return None, None, {}
+    with open(path) as f:
+        data = json.load(f)
+    return data["model"], data["dimensions"], data["embeddings"]
+
+
+def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url,
+                      embeddings=None):
     start = recording_start(file_name)
     if start is None:
         log.warning("no hay inicio de grabación en %r; capturedAt usa la hora "
@@ -153,13 +166,48 @@ def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url
             captured_at = start + timedelta(seconds=time_s)
         else:
             captured_at = parse_instant(created_at).astimezone(CAMERA_TZ)
-        appearances.append({
+        appearance = {
             "faceId": f"{job_id}_{face['track_id']}",
             "timestamp": video_timestamp(time_s) if time_s is not None else None,
             "frameUrl": frame_url(face, os.path.join(faces_dir, face["face_file"])),
             "capturedAt": captured_at.isoformat(timespec="seconds"),
-        })
+        }
+        if embeddings and str(face["track_id"]) in embeddings:
+            appearance["embedding"] = embeddings[str(face["track_id"])]
+        appearances.append(appearance)
     return appearances
+
+
+def split_parts(appearances, header_bytes, limit=PART_BYTES):
+    base = header_bytes + PART_ENVELOPE_MARGIN
+    parts, current, size = [], [], base
+    for appearance in appearances:
+        item = len(json.dumps(appearance).encode()) + 2
+        if base + item >= limit:
+            raise JobError(f"la detección {appearance.get('faceId')} ocupa {item} bytes "
+                           f"y no cabe en una parte de {limit} bytes")
+        if current and size + item >= limit:
+            parts.append(current)
+            current, size = [], base
+        current.append(appearance)
+        size += item
+    if current or not parts:
+        parts.append(current)
+    return parts
+
+
+def send_completed(sqs, job_id, attempt_id, appearances, model, dimensions):
+    fields = {"attemptId": attempt_id}
+    if model is not None:
+        fields["embeddingModel"] = model
+        fields["embeddingDimensions"] = dimensions
+    sample = {"eventType": EVENT_COMPLETED, "eventVersion": EVENT_VERSION, "jobId": job_id,
+              "sentAt": "2000-01-01T00:00:00.000000Z", "part": 99999, "parts": 99999,
+              **fields}
+    parts = split_parts(appearances, len(json.dumps(sample).encode()))
+    for number, part in enumerate(parts, start=1):
+        send_event(sqs, EVENT_COMPLETED, job_id, part=number, parts=len(parts),
+                   **fields, appearances=part)
 
 
 def send_event(sqs, event_type, job_id, **fields):
@@ -266,9 +314,13 @@ def process_job(sqs, s3, msg):
 
     if os.path.isfile(payload_path):
         with open(payload_path) as f:
-            appearances = json.load(f)
+            saved = json.load(f)
+        if isinstance(saved, list):
+            saved = {"appearances": saved}
         log.info("[%s] se reutilizan los resultados de un intento anterior", job_id)
-        send_event(sqs, EVENT_COMPLETED, job_id, appearances=appearances)
+        send_completed(sqs, job_id, saved.get("attemptId") or str(uuid.uuid4()),
+                       saved["appearances"], saved.get("embeddingModel"),
+                       saved.get("embeddingDimensions"))
         if not KEEP_JOB_FILES:
             shutil.rmtree(job_dir, ignore_errors=True)
         return
@@ -298,15 +350,19 @@ def process_job(sqs, s3, msg):
                 return f"{FACES_URL_BASE}/{face_key}"
             return f"https://{bucket}.s3.{AWS_REGION}.amazonaws.com/{face_key}"
 
+        model, dimensions, embeddings = identity_embeddings(faces_dir)
         appearances = build_appearances(
             job_id, faces, faces_dir,
             msg.get("originalFileName") or os.path.basename(key),
-            msg.get("createdAt"), upload_face,
+            msg.get("createdAt"), upload_face, embeddings,
         )
+        attempt_id = str(uuid.uuid4())
         with open(payload_path, "w") as f:
-            json.dump(appearances, f)
+            json.dump({"attemptId": attempt_id, "embeddingModel": model,
+                       "embeddingDimensions": dimensions,
+                       "appearances": appearances}, f)
         try:
-            send_event(sqs, EVENT_COMPLETED, job_id, appearances=appearances)
+            send_completed(sqs, job_id, attempt_id, appearances, model, dimensions)
         except JobError:
             raise
         except Exception:
@@ -414,9 +470,10 @@ def run_local(video_path, job_id):
     shutil.rmtree(job_dir, ignore_errors=True)
     os.makedirs(job_dir)
     faces_dir, faces = run_pipeline(os.path.abspath(video_path), job_dir)
+    _, _, embeddings = identity_embeddings(faces_dir)
     appearances = build_appearances(
         job_id, faces, faces_dir, os.path.basename(video_path),
-        datetime.now(timezone.utc).isoformat(), lambda face, path: path,
+        datetime.now(timezone.utc).isoformat(), lambda face, path: path, embeddings,
     )
     print(json.dumps({"appearances": appearances}, indent=2))
 

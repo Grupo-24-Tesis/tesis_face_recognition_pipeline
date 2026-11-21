@@ -361,14 +361,26 @@ Manejo de fallos:
 - Errores transitorios (red, una etapa que falla): el mensaje queda en la cola y SQS lo
   vuelve a entregar al vencer el visibility timeout. En la entrega número `MAX_ATTEMPTS`
   el worker publica `VIDEO_PROCESSING_FAILED` con el motivo y borra el mensaje.
-- Errores permanentes (mensaje mal formado, video inexistente, resultados que no caben en
-  un evento): el worker publica `VIDEO_PROCESSING_FAILED` y borra el mensaje. `jobId`
+- Errores permanentes (mensaje mal formado, video inexistente, una detección que no cabe en
+  una parte del resultado): el worker publica `VIDEO_PROCESSING_FAILED` y borra el mensaje. `jobId`
   forma parte de rutas locales y de S3, así que solo se aceptan letras, números, `_` y
   `-`, hasta 64 caracteres; un mensaje sin un `jobId` así se borra sin avisar.
 - Si no se puede publicar `VIDEO_PROCESSING_FAILED`, el mensaje queda en la cola para
   avisar en la siguiente entrega.
 - Si el pipeline terminó pero no se pudo publicar el resultado, se conserva solo
-  `payload.json` y la siguiente entrega lo reenvía sin repetir las etapas.
+  `payload.json` y la siguiente entrega lo reenvía sin repetir las etapas. El archivo
+  guarda `attemptId`, `embeddingModel`, `embeddingDimensions` y `appearances`; los formatos
+  anteriores (una lista, o un objeto sin `attemptId`) se siguen leyendo y reciben un
+  `attemptId` nuevo.
+- `VIDEO_PROCESSING_COMPLETED` va en partes numeradas. El worker agrupa las detecciones en
+  orden y cada mensaje queda por debajo de `PART_BYTES` (240 KiB, unas 80 detecciones con
+  embedding); un resultado de una sola parte lleva `part` 1 y `parts` 1. Cada parte lleva
+  `attemptId` (un UUID nuevo por cada corrida del pipeline), `part`, `parts`,
+  `embeddingModel` (`GhostFaceNet`) y `embeddingDimensions` (512). Cada detección lleva
+  `embedding`: el vector unitario float32 little-endian en base64. En el modo `tracks` no hay
+  `embeddings.json`, así que el evento no lleva campos de embedding. Si falla un envío, la
+  siguiente entrega reenvía todas las partes con el mismo `attemptId`, y el backend toma una
+  parte repetida como una sobrescritura. El heartbeat sigue hasta enviar la última parte.
 - Un heartbeat extiende la visibilidad del mensaje y publica `VIDEO_PROCESSING_STARTED`
   cada 120 s mientras corre el trabajo. El backend da por fallido un trabajo que deja de
   reportar avance. Cada etapa se corta tras `STAGE_TIMEOUT`.
@@ -801,7 +813,8 @@ Salidas en `--faces-dir`:
 | `<id>/face_of_<id>.jpg` | Mejor rostro de la identidad, con cabeza y hombros |
 | `results.json` | El mismo formato de `face_recognition.py`, con el id de la identidad como `track_id`. `tracks_checked` es el número de identidades, `candidates_checked` el número de rostros de la identidad y `candidate` queda en `null` |
 | `detections.json` | `fps`, `step`, `frames_analysed` (índices de los fotogramas analizados) y `detections`, con `frame`, `time_s`, `box`, `score` y `px` de cada rostro que devolvió RetinaFace en cada fotograma analizado, antes de los filtros de identidad |
-| `identities.json` | `video`, `fps`, `step` (el paso fijo, o el paso denso con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo que se eligió después de su fotograma y que el rostro aporta a la presencia). No guarda embeddings |
+| `embeddings.json` | `model` (`GhostFaceNet`), `dimensions` (512) y `embeddings`: por cada `track_id` de `results.json`, el vector unitario del promedio de los embeddings de sus rostros (`float32` little-endian en base64). El worker lo envía con cada detección |
+| `identities.json` | `video`, `fps`, `step` (el paso fijo, o el paso denso con el muestreo adaptativo), `adaptive`, `steps` (paso de cada modo), `analysed_frames`, `frames_per_mode`, `wall_time_s` y, por identidad, `id` y todos sus rostros con `frame`, `time_s`, `box`, `score`, `px` e `interval_s` (intervalo que se eligió después de su fotograma y que el rostro aporta a la presencia). No guarda embeddings (están en `embeddings.json`) |
 
 Al terminar imprime cuántos fotogramas analizó (por modo, con el muestreo adaptativo),
 cuántos rostros detectó, cuántas identidades conservó y el tiempo total del proceso.

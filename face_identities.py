@@ -20,7 +20,7 @@ from retinaface import RetinaFace
 
 from face_recognition import (OUTPUT_MARGIN_BOTTOM, OUTPUT_MARGIN_SIDE, OUTPUT_MARGIN_TOP,
                               RESULTS_NAME, crop_face, rank_key, sharpness)
-from face_embedding import EMBED_CHUNK, embed_faces, unit_embedding
+from face_embedding import EMBED_CHUNK, embed_faces, embeddings_record, unit_embedding
 from face_sampling import (ADAPTIVE, FIXED, MODE_LABELS, CountingCapture, base_step,
                            detections_record, frame_count_warning, frame_repeats, read_frames,
                            sample_video, sampling_steps)
@@ -37,6 +37,7 @@ ARCFACE_TEMPLATE = np.array([[38.2946, 51.6963], [73.5318, 51.5014], [56.0252, 7
                              [41.5493, 92.3655], [70.7299, 92.2041]], dtype=np.float32)
 IDENTITIES_NAME = "identities.json"
 DETECTIONS_NAME = "detections.json"
+EMBEDDINGS_NAME = "embeddings.json"
 BOX_COLOR = (0, 255, 0)
 
 
@@ -280,6 +281,9 @@ def main():
     for identity_id, faces in enumerate(identities, start=1):
         if identity_id in saved:
             results.append(face_result(identity_id, faces, saved[identity_id], fps))
+
+    with open(os.path.join(args.faces_dir, EMBEDDINGS_NAME), "w") as f:
+        json.dump(embeddings_record(EMBEDDING_MODEL, identities, set(saved)), f)
 
     frames_per_mode = {mode: sum(1 for _, m in sampled if m == mode) for mode in steps}
     wall_time_s = time.monotonic() - STARTED
