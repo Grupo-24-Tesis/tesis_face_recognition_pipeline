@@ -292,6 +292,7 @@ consulta SQS sin parar. Variables:
 | `CAMERA_TZ` | `America/Bogota` | Zona horaria del reloj de las cámaras |
 | `KEEP_JOB_FILES` | `0` | Con `1` se conservan los archivos de cada trabajo en `database/jobs/` |
 | `STAGE_TIMEOUT` | `7200` | Segundos máximos por etapa |
+| `RESULT_PART_BYTES` | `245760` | Tamaño máximo en bytes de cada parte del resultado: un entero entre 1 y 245760 (240 KiB). El worker lo valida al arrancar y no arranca con otro valor |
 | `MAX_ATTEMPTS` | `3` | Entregas de un mismo trabajo antes de darlo por fallido |
 
 El worker y el backend no se conectan entre sí: solo hablan con SQS y S3. Por eso pueden
@@ -353,8 +354,9 @@ Todos llevan `eventVersion`, `jobId` y `sentAt` (UTC, ISO-8601). Ejemplo:
   la grabación tomado del nombre del archivo del NVR (`Camera_chN_YYYYMMDDHHMMSS...`) más
   `timestamp`; si el nombre no tiene la hora o falta el tiempo del rostro, se usa la hora
   de subida. Siempre en `CAMERA_TZ`.
-- Un evento no puede pasar de 256 KiB, el tamaño que admite cualquier cola de SQS. Caben
-  unos mil rostros por video; si hay más, el trabajo se reporta como fallido.
+- Un mensaje no puede pasar de 256 KiB, el tamaño que admite cualquier cola de SQS. Los
+  resultados van en partes, así que no hay tope de rostros por video; solo una detección
+  que por sí sola no quepa en una parte hace fallar el trabajo.
 
 Manejo de fallos:
 
@@ -373,8 +375,8 @@ Manejo de fallos:
   anteriores (una lista, o un objeto sin `attemptId`) se siguen leyendo y reciben un
   `attemptId` nuevo.
 - `VIDEO_PROCESSING_COMPLETED` va en partes numeradas. El worker agrupa las detecciones en
-  orden y cada mensaje queda por debajo de `PART_BYTES` (240 KiB, unas 80 detecciones con
-  embedding); un resultado de una sola parte lleva `part` 1 y `parts` 1. Cada parte lleva
+  orden y cada mensaje queda por debajo de `RESULT_PART_BYTES` (240 KiB por defecto, unas 80
+  detecciones con embedding); un resultado de una sola parte lleva `part` 1 y `parts` 1. Cada parte lleva
   `attemptId` (un UUID nuevo por cada corrida del pipeline), `part`, `parts`,
   `embeddingModel` (`GhostFaceNet`) y `embeddingDimensions` (512). Cada detección lleva
   `embedding`: el vector unitario float32 little-endian en base64. En el modo `tracks` no hay

@@ -36,7 +36,7 @@ EVENT_COMPLETED = "VIDEO_PROCESSING_COMPLETED"
 EVENT_FAILED = "VIDEO_PROCESSING_FAILED"
 EVENT_VERSION = "1"
 MAX_EVENT_BYTES = 256 * 1024
-PART_BYTES = 240 * 1024
+MAX_PART_BYTES = 240 * 1024
 PART_ENVELOPE_MARGIN = 64
 MAX_REASON_CHARS = 500
 VISIBILITY_TIMEOUT = 300
@@ -103,6 +103,23 @@ def face_gating_enabled():
 
 
 FACE_GATING = face_gating_enabled()
+
+
+def read_part_bytes():
+    value = os.environ.get("RESULT_PART_BYTES", "").strip()
+    if not value:
+        return MAX_PART_BYTES
+    try:
+        size = int(value)
+    except ValueError:
+        size = 0
+    if not 1 <= size <= MAX_PART_BYTES:
+        raise SystemExit(f"RESULT_PART_BYTES debe ser un entero entre 1 y {MAX_PART_BYTES}, "
+                         f"no {value!r}")
+    return size
+
+
+PART_BYTES = read_part_bytes()
 
 
 def run_stage(python, script, *args):
@@ -178,7 +195,8 @@ def build_appearances(job_id, faces, faces_dir, file_name, created_at, frame_url
     return appearances
 
 
-def split_parts(appearances, header_bytes, limit=PART_BYTES):
+def split_parts(appearances, header_bytes, limit=None):
+    limit = PART_BYTES if limit is None else limit
     base = header_bytes + PART_ENVELOPE_MARGIN
     parts, current, size = [], [], base
     for appearance in appearances:
