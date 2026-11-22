@@ -54,10 +54,11 @@ en dos días distintos y cámara 3):
 | Confianza mínima del rostro | 0.92 | `FACE_CONFIDENCE_THRESHOLD` en `face_recognition.py` |
 | Tamaño mínimo del rostro | 12 px de lado menor | `MIN_FACE_PX` en `face_recognition.py` |
 
-Cada persona seguida entrega como máximo un rostro, y la identidad es por video. No hay
-reconocimiento de la misma persona entre videos: con estas cámaras (960x480, rostros de
-unos 21 px de mediana) los embeddings no distinguen personas mejor que el azar. Se
-puede retomar con video de mayor resolución (decisión D001 en `tesis-experiments`).
+Cada persona seguida entrega como máximo un rostro, y la identidad es por video. El modo
+`tracks` no calcula embeddings, así que sus detecciones no pueden buscarse en otros
+videos. Con estas cámaras (960x480, rostros de unos 21 px de mediana) los embeddings no
+distinguían personas mejor que el azar (decisión D001 en `tesis-experiments`); la
+búsqueda entre videos se retomó con el modo `faces` (ver "Reconocimiento entre videos").
 La configuración del modo `faces` está en "Modo faces: identidad por rostro".
 
 ---
@@ -972,15 +973,26 @@ DET-05 y E2E-03).
 
 ---
 
-## Reconocimiento entre videos (no incluido)
+## Reconocimiento entre videos
 
-El modo `faces` calcula embeddings, pero solo los compara dentro de un mismo video: la
-identidad sigue siendo por video. Se probó en `tesis-experiments`: con la resolución de
-las cámaras actuales los embeddings no sirven para reconocer a la misma persona entre
-videos (decisión D001). La decisión D002 (agrupar rostros dentro de un video perdía
-personas) es anterior al modo `faces`. Si se retoma el reconocimiento entre videos con
-mejor video, el script corre en `venvs/faces` y puede partir de los embeddings de
-GhostFaceNet que ya calcula `face_identities.py`.
+La identidad sigue siendo por video: `face_identities.py` compara embeddings solo dentro
+de un mismo video. Para la búsqueda entre videos escribe en `embeddings.json` un vector
+por detección, el promedio unitario de los embeddings de GhostFaceNet de sus rostros, y el
+worker lo envía con cada detección en `VIDEO_PROCESSING_COMPLETED`. El pipeline no compara
+videos entre sí: el backend guarda los vectores, propone detecciones de otros videos
+ordenadas por similitud (producto punto, umbral 0.55 por defecto) y un vigilante confirma
+o descarta cada par.
+
+La decisión D001 había descartado el reconocimiento entre videos con las cámaras
+residenciales (960x480, rostros de unos 21 px de mediana), donde los embeddings no
+distinguían personas mejor que el azar. La decisión D007 lo retomó con los videos de
+ChokePoint, de rostros más grandes. En los 72 videos de ChokePoint con etiquetas, con el
+embedding medio por identidad, el primer candidato fue la misma persona en el 98.4 % de
+las búsquedas sobre los demás videos (azar: 3.2 %), y con el umbral 0.55 el 93 % de los
+candidatos listados eran correctos y se encontró el 94 % de los pares reales
+(`bench/entre_camaras.py` en `tesis-experiments`). Con video como el de las cámaras
+residenciales la búsqueda no es confiable. La decisión D002 (agrupar rostros dentro de un
+video perdía personas) es anterior al modo `faces`.
 
 ---
 
