@@ -676,6 +676,11 @@ Medido en una T4 contra la misma configuración sin compuerta (`--no-gating`). U
 detección perdida es una cara que la corrida sin compuerta encontró y la corrida con
 compuerta no.
 
+Las cifras de esta sección vienen de las corridas más amplias del 2026-11-17. La medición
+se repitió el 2026-11-22 con el código entregado sobre un conjunto reducido de 8 videos
+(sección "Pruebas"): 0 detecciones perdidas y las mismas 107 personas encontradas, con un
+factor de 1.74 con compuerta contra 1.68 sin ella.
+
 | Conjunto | Sin compuerta | Con compuerta | Detecciones perdidas | Personas encontradas |
 | --- | --- | --- | --- | --- |
 | Video de 45 min, 4.3 % con personas (ChokePoint unido con tramos vacíos: unos 7.4 s de metraje vacío real repetidos en ida y vuelta, más un fotograma congelado) | 3645 s (factor 1.35) | 466 s (factor 0.17: compuerta 171 s, rostros 295 s) | 0 | 15 de 15 en ambas |
@@ -835,6 +840,84 @@ ChokePoint se dejó aparte y no se usó para ajustar los parámetros.
 
 ---
 
+## Pruebas
+
+Las pruebas del flujo completo se corren desde el banco de pruebas `tesis-experiments`
+(`/data/TesisFaceRecognition/tesis_face_recognition_experiments`), que llama al pipeline
+como subprocesos y nunca edita sus archivos. La última corrida fue el 2026-11-22, entre
+las 21:08 y las 22:02 UTC, en la g4dn.xlarge del proyecto (Tesla T4), contra el commit
+`a9c95c7` de este repo (rama `test-suite`, sin cambios pendientes) y con los parámetros de
+producción: compuerta de presencia activa y los valores por defecto de "Configuración
+vigente".
+
+### Cómo se corren
+
+```bash
+cd /data/TesisFaceRecognition/tesis_face_recognition_experiments
+bench/flujo_actual.sh
+venvs/eval/bin/python -m harness.export_excel
+```
+
+`bench/flujo_actual.sh` escribe sus resultados en `runs/flujo_actual/`, y
+`harness.export_excel` regenera `tuning_results.xlsx` en la raíz de `tesis-experiments`,
+con las hojas Resumen, Flujo - totales, Flujo - videos, Entre cámaras, Entre cámaras -
+umbrales y Entorno. El detalle por video y por umbral está en ese Excel; aquí solo van
+las cifras principales.
+
+### Videos
+
+El conjunto se redujo para que la corrida completa quepa en una hora. Son 8 videos:
+
+- 2 cámaras residenciales con etiquetas del proyecto, Camera_ch6 y Camera3 (960x480,
+  rostros pequeños).
+- 4 videos de ChokePoint con su ground truth oficial: P1E_S1_C1, P1E_S1_C2, P1E_S2_C1 y
+  P2E_S1_C2.1.
+- 2 clips de casos borde para la compuerta: borde_inicio y borde_seguidos.
+
+El video de 45 minutos no se repitió: solo su corrida sin compuerta tarda cerca de una
+hora.
+
+### Qué se mide, para qué y resultados
+
+- **PRU-01, pruebas automáticas.** La suite pytest de `tesis-experiments` cubre las
+  métricas del banco y `worker.py`, para poder confiar en las herramientas de medición y
+  en el worker. Resultado: 459 pruebas aprobadas y 0 fallidas.
+- **ENV-01, entorno.** Revisa los venvs `track`, `faces`, `eval` y `worker`: bibliotecas,
+  GPU y lectura de video. Resultado: 14 de 14 revisiones aprobadas.
+- **FLU-01, flujo de producción.** Corre la compuerta y `face_identities.py` para medir
+  cuántos rostros se detectan, con qué precisión y si cada persona queda en una sola
+  identidad por video. En ChokePoint la precisión de detección fue 97.0 % y la
+  exhaustividad 99.9 %; 95 de las 99 personas etiquetadas tuvieron su propia identidad,
+  sin duplicados, con 6 identidades que mezclan personas y una pureza de 95.9 %. En las
+  cámaras residenciales, con rostros pequeños, la precisión fue 85.8 % y la exhaustividad
+  80.1 %; se encontraron 9 de 17 personas, con 2 duplicados y 1 identidad mezclada.
+- **FLU-02, compuerta.** Compara el mismo flujo con y sin compuerta (`--no-gating`) para
+  confirmar que la compuerta no pierde nada y ver su costo. Ninguna detección de la
+  corrida sin compuerta faltó con ella, la exhaustividad no cambió (95.0 % en los 8
+  videos), se encontraron las mismas 107 personas y no hubo regresiones. El factor de
+  tiempo (segundos de proceso por segundo de video) fue 1.68 sin compuerta y 1.74 con
+  ella: estos videos tienen personas casi todo el tiempo, así que la compuerta cuesta un
+  poco. El ahorro aparece en video mayormente vacío, como el de 45 minutos medido el
+  2026-11-17, que fue 7.8 veces más rápido.
+- **FLU-03, búsqueda entre cámaras.** Usa el embedding medio unitario de GhostFaceNet por
+  identidad que envía el worker, leído del `embeddings.json` de la corrida con compuerta,
+  convertido con `bench/entre_camaras_corrida.py` y puntuado con `bench/entre_camaras.py`
+  contra el ground truth de ChokePoint, para ver si la búsqueda del backend propone a la
+  misma persona en otros videos. Con 4 videos y 99 identidades (89 etiquetadas), el primer
+  candidato fue la misma persona en el 100 % de las búsquedas, también en otra sesión y en
+  el otro portal (azar: 3.8 %). Con el umbral 0.55 del backend, el 98.0 % de los
+  candidatos listados eran correctos y se encontró el 100 % de los pares reales. Con solo
+  4 videos la galería es pequeña; la medición de 72 videos del 2026-11-20 (98.4 %) sigue
+  siendo la referencia más amplia.
+
+### Pruebas anteriores
+
+Las suites anteriores del banco (TRK, DET, SEL, EMB, CLU, E2E y XV) midieron el flujo
+previo basado en seguimiento (`tracking.py` y `face_recognition.py`), que producción ya
+no corre. Ya no están en el Excel; sus corridas siguen en `tesis-experiments`.
+
+---
+
 ## Notas y peculiaridades
 
 - **Sin interfaz gráfica.** Los venvs usan OpenCV headless, así que no se abren ventanas.
@@ -874,7 +957,11 @@ ChokePoint, de rostros más grandes. En los 72 videos de ChokePoint con etiqueta
 embedding medio por identidad, el primer candidato fue la misma persona en el 98.4 % de
 las búsquedas sobre los demás videos (azar: 3.2 %), y con el umbral 0.55 el 93 % de los
 candidatos listados eran correctos y se encontró el 94 % de los pares reales
-(`bench/entre_camaras.py` en `tesis-experiments`). Con video como el de las cámaras
+(`bench/entre_camaras.py` en `tesis-experiments`). Esas cifras vienen de la medición
+amplia del 2026-11-20; se repitió el 2026-11-22 con el código entregado sobre un conjunto
+reducido de 4 videos de ChokePoint (sección "Pruebas"), donde el primer candidato fue la
+misma persona en el 100 % de las búsquedas y, con el umbral 0.55, el 98.0 % de los
+candidatos listados eran correctos. Con video como el de las cámaras
 residenciales la búsqueda no es confiable. La decisión D002 (agrupar con embeddings los
 rostros de las personas seguidas en un video perdía personas y mezclaba a personas
 distintas) es anterior a la identidad por rostro actual.
